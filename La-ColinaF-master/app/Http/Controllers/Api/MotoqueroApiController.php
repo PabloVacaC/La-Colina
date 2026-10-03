@@ -219,6 +219,16 @@ class MotoqueroApiController extends Controller
 
         try {
             $pedido = Pedido::with('cliente')->findOrFail($id);
+
+            // Protección: Si el pedido ya fue entregado, el distribuidor no puede modificarlo nuevamente
+            if ($pedido->estado === 'Entregado') {
+                DB::rollBack();
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Este pedido ya fue entregado y no se puede modificar nuevamente.',
+                ], 422);
+            }
+
             $pedido->estado = 'Entregado';
 
             if ($request->filled('metodo_pago')) {

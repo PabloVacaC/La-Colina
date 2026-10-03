@@ -413,6 +413,7 @@ class _MapaRutaScreenState extends State<MapaRutaScreen> {
     );
 
     if (confirm != true) return;
+    if (pedido.estado == 'Entregado') return;
 
     final success = await _api.finalizarPedido(pedido.id, metodo);
     if (success && mounted) {

@@ -258,6 +258,7 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
     final nuevoPrimero = pendientes.first;
 
     final requiereNuevoCalculo = _pedidoActivo == null ||
+        _pedidoActivo!.estado == 'Entregado' ||
         !pendientes.any((p) => p.id == _pedidoActivo!.id) ||
         adminCambioSecuencia;
 
@@ -395,6 +396,7 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
   /// Verifica si el motoquero está a 20 metros o menos del cliente activo
   void _verificarProximidad(LatLng posMoto) {
     if (_pedidoActivo == null) return;
+    if (_pedidoActivo!.estado == 'Entregado') return;
     final c = _pedidoActivo!.cliente;
     if (c == null || c.latitud == null || c.longitud == null) return;
 
@@ -566,13 +568,32 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
     String metodoPago, {
     List<Map<String, dynamic>>? items,
   }) async {
+    // Si ya está entregado, bloquear cualquier modificación
+    if (pedido.estado == 'Entregado') {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          backgroundColor: Colors.orange,
+          content: Text('Este pedido ya fue entregado y no puede modificarse.'),
+        ),
+      );
+      return;
+    }
+
     final success = await _api.finalizarPedido(pedido.id, metodoPago, items: items);
+    if (!mounted) return;
+
     if (!success) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('No se pudo guardar la entrega. Revisa tu conexión.')),
       );
       return;
     }
+
+    // Actualizar de inmediato el estado local del pedido
+    setState(() {
+      pedido.estado = 'Entregado';
+      pedido.metodoPago = metodoPago;
+    });
 
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
@@ -651,6 +672,7 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
 
   void _mostrarVentanaEntregaCliente(Pedido pedido) {
     final c = pedido.cliente;
+    final esEntregado = pedido.estado == 'Entregado';
 
     showModalBottomSheet(
       context: context,
@@ -664,7 +686,10 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
               decoration: BoxDecoration(
                 color: Colors.white,
                 borderRadius: BorderRadius.circular(20),
-                border: Border.all(color: const Color(0xFF00C853), width: 2), // Borde verde de la captura
+                border: Border.all(
+                  color: esEntregado ? Colors.green.shade600 : const Color(0xFF00C853),
+                  width: 2,
+                ),
                 boxShadow: const [
                   BoxShadow(color: Colors.black26, blurRadius: 16, offset: Offset(0, 4)),
                 ],
@@ -677,7 +702,7 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
                     mainAxisSize: MainAxisSize.min,
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      // Barra superior: Badge Pedido #X • En Camino y Precio
+                      // Barra superior: Badge Pedido y Precio
                       Row(
                         mainAxisAlignment: MainAxisAlignment.spaceBetween,
                         children: [
@@ -685,17 +710,31 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
                             child: Container(
                               padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
                               decoration: BoxDecoration(
-                                color: const Color(0xFFFFF3E0), // Naranja suave
+                                color: esEntregado ? const Color(0xFFE8F5E9) : const Color(0xFFFFF3E0),
                                 borderRadius: BorderRadius.circular(8),
+                                border: esEntregado ? Border.all(color: Colors.green.shade300) : null,
                               ),
-                              child: Text(
-                                'Pedido #${pedido.id} • En Camino',
-                                style: const TextStyle(
-                                  fontWeight: FontWeight.bold,
-                                  color: Color(0xFFEF6C00),
-                                  fontSize: 13,
-                                ),
-                                overflow: TextOverflow.ellipsis,
+                              child: Row(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  if (esEntregado) ...[
+                                    const Icon(Icons.check_circle, size: 14, color: Color(0xFF00C853)),
+                                    const SizedBox(width: 4),
+                                  ],
+                                  Flexible(
+                                    child: Text(
+                                      esEntregado
+                                          ? 'Pedido #${pedido.id} • Entregado'
+                                          : 'Pedido #${pedido.id} • En Camino',
+                                      style: TextStyle(
+                                        fontWeight: FontWeight.bold,
+                                        color: esEntregado ? const Color(0xFF2E7D32) : const Color(0xFFEF6C00),
+                                        fontSize: 13,
+                                      ),
+                                      overflow: TextOverflow.ellipsis,
+                                    ),
+                                  ),
+                                ],
                               ),
                             ),
                           ),
@@ -826,52 +865,132 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
 
                             const SizedBox(height: 8),
 
-                            // Botón Cambiar / Tomar Foto
-                            SizedBox(
-                              width: double.infinity,
-                              child: OutlinedButton.icon(
-                                onPressed: c != null
-                                    ? () async {
-                                        await _tomarYSubirFoto(c);
-                                        setModalState(() {});
-                                      }
-                                    : null,
-                                icon: const Icon(Icons.camera_alt, size: 16),
-                                label: Text(c?.imagenCasaUrl != null ? 'Cambiar Foto' : 'Tomar / Subir Foto'),
-                                style: OutlinedButton.styleFrom(
-                                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+                            // Botón Cambiar / Tomar Foto (solo si no ha sido entregado)
+                            if (!esEntregado) ...[
+                              const SizedBox(height: 8),
+                              SizedBox(
+                                width: double.infinity,
+                                child: OutlinedButton.icon(
+                                  onPressed: c != null
+                                      ? () async {
+                                          await _tomarYSubirFoto(c);
+                                          setModalState(() {});
+                                        }
+                                      : null,
+                                  icon: const Icon(Icons.camera_alt, size: 16),
+                                  label: Text(c?.imagenCasaUrl != null ? 'Cambiar Foto' : 'Tomar / Subir Foto'),
+                                  style: OutlinedButton.styleFrom(
+                                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+                                  ),
                                 ),
                               ),
-                            ),
+                            ],
                           ],
                         ),
                       ),
                       const SizedBox(height: 14),
 
-                      // Botón Verde Grande: COMPLETAR ENTREGA
-                      SizedBox(
-                        width: double.infinity,
-                        child: ElevatedButton.icon(
-                          onPressed: () {
-                            Navigator.pop(ctx);
-                            WidgetsBinding.instance.addPostFrameCallback((_) {
-                              if (mounted) {
-                                _mostrarDialogoMetodoPago(pedido);
-                              }
-                            });
-                          },
-                          icon: const Icon(Icons.check_circle, size: 20, color: Colors.white),
-                          label: const Text(
-                            'COMPLETAR ENTREGA',
-                            style: TextStyle(fontSize: 15, fontWeight: FontWeight.bold, color: Colors.white),
+                      // Si ya fue entregado: mostrar resumen informativo del pago
+                      if (esEntregado) ...[
+                        Container(
+                          width: double.infinity,
+                          margin: const EdgeInsets.only(bottom: 12),
+                          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                          decoration: BoxDecoration(
+                            color: Colors.green.shade50,
+                            borderRadius: BorderRadius.circular(10),
+                            border: Border.all(color: Colors.green.shade200),
                           ),
-                          style: ElevatedButton.styleFrom(
-                            backgroundColor: const Color(0xFF00C853), // Verde brillante
-                            padding: const EdgeInsets.symmetric(vertical: 14),
-                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                          child: Row(
+                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                            children: [
+                              Row(
+                                children: [
+                                  Icon(
+                                    (pedido.metodoPago ?? '').toLowerCase().contains('qr')
+                                        ? Icons.qr_code
+                                        : Icons.payments_outlined,
+                                    size: 18,
+                                    color: Colors.green.shade800,
+                                  ),
+                                  const SizedBox(width: 8),
+                                  Text(
+                                    'Cobrado con: ${pedido.metodoPago ?? "Efectivo"}',
+                                    style: TextStyle(
+                                      fontWeight: FontWeight.bold,
+                                      fontSize: 13,
+                                      color: Colors.green.shade800,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                              Text(
+                                'Bs. ${pedido.totalPrecio.toStringAsFixed(2)}',
+                                style: TextStyle(
+                                  fontWeight: FontWeight.w900,
+                                  fontSize: 15,
+                                  color: Colors.green.shade800,
+                                ),
+                              ),
+                            ],
                           ),
                         ),
-                      ),
+                      ],
+
+                      // Botón COMPLETAR ENTREGA (solo disponible si el pedido aún no fue entregado)
+                      if (!esEntregado)
+                        SizedBox(
+                          width: double.infinity,
+                          child: ElevatedButton.icon(
+                            onPressed: () {
+                              Navigator.pop(ctx);
+                              WidgetsBinding.instance.addPostFrameCallback((_) {
+                                if (mounted) {
+                                  _mostrarDialogoMetodoPago(pedido);
+                                }
+                              });
+                            },
+                            icon: const Icon(Icons.check_circle, size: 20, color: Colors.white),
+                            label: const Text(
+                              'COMPLETAR ENTREGA',
+                              style: TextStyle(fontSize: 15, fontWeight: FontWeight.bold, color: Colors.white),
+                            ),
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: const Color(0xFF00C853), // Verde brillante
+                              padding: const EdgeInsets.symmetric(vertical: 14),
+                              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                            ),
+                          ),
+                        )
+                      else
+                        // Mensaje de solo lectura: el distribuidor ya no puede modificar el pedido
+                        Container(
+                          width: double.infinity,
+                          padding: const EdgeInsets.symmetric(vertical: 14, horizontal: 16),
+                          decoration: BoxDecoration(
+                            color: Colors.grey.shade100,
+                            borderRadius: BorderRadius.circular(12),
+                            border: Border.all(color: Colors.green.shade400, width: 1.5),
+                          ),
+                          child: Row(
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            children: const [
+                              Icon(Icons.check_circle, color: Color(0xFF00C853), size: 24),
+                              SizedBox(width: 10),
+                              Expanded(
+                                child: Text(
+                                  'Pedido entregado y finalizado.\nNo se puede volver a modificar.',
+                                  textAlign: TextAlign.center,
+                                  style: TextStyle(
+                                    color: Color(0xFF2E7D32),
+                                    fontSize: 13,
+                                    fontWeight: FontWeight.bold,
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
                     ],
                   ),
                 ),
@@ -885,6 +1004,17 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
 
   /// Diálogo con desglose de productos y método de pago al completar entrega (exacto al sistema web)
   Future<void> _mostrarDialogoMetodoPago(Pedido pedido) async {
+    // Si ya está entregado, no permitir abrir el modal ni modificar
+    if (pedido.estado == 'Entregado') {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          backgroundColor: Colors.orange,
+          content: Text('Este pedido ya fue entregado y no se puede modificar.'),
+        ),
+      );
+      return;
+    }
+
     final result = await showDialog<Map<String, dynamic>>(
       context: context,
       barrierDismissible: false,
@@ -1717,6 +1847,12 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
           height: esActivo ? 50 : 38,
           child: GestureDetector(
             onTap: () {
+              if (esEntregado) {
+                // Si ya fue entregado, abrir solo para consulta informativa (solo lectura)
+                // NO se fija como destino activo ni se recalcula ruta
+                _mostrarVentanaEntregaCliente(p);
+                return;
+              }
               setState(() {
                 _pedidoActivo = p;
                 _pedidoProximidadAbiertoId = null;
@@ -1882,8 +2018,8 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
           ),
         ),
 
-        // Tarjeta flotante inferior con el pedido activo
-        if (_pedidoActivo != null)
+        // Tarjeta flotante inferior con el pedido activo (solo si sigue pendiente)
+        if (_pedidoActivo != null && _pedidoActivo!.estado != 'Entregado')
           Positioned(
             bottom: 12,
             left: 12,
@@ -1895,6 +2031,7 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
   }
 
   Widget _buildTarjetaFlotantePedidoActivo(Pedido p) {
+    if (p.estado == 'Entregado') return const SizedBox.shrink();
     final c = p.cliente;
 
     return Card(
@@ -2186,6 +2323,7 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
                   margin: const EdgeInsets.only(bottom: 8),
                   shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
                   child: ListTile(
+                    onTap: () => _mostrarVentanaEntregaCliente(p),
                     leading: CircleAvatar(
                       backgroundColor: Colors.green.shade50,
                       child: const Icon(Icons.check_circle, color: Color(0xFF00C853)),
@@ -2275,6 +2413,12 @@ class _DialogoFinalizarEntregaState extends State<_DialogoFinalizarEntrega> {
   @override
   void initState() {
     super.initState();
+    if (widget.pedido.estado == 'Entregado') {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) Navigator.pop(context);
+      });
+      return;
+    }
     _inicializarProductos();
   }
 
