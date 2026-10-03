@@ -53,6 +53,9 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
   int? _pedidoProximidadAbiertoId;
   DateTime? _ultimoCalculoRuta;
 
+  int? _ultimoPrimerPedidoId;
+  int? _ultimoOrdenPrimerPedido;
+
   Timer? _refreshTimer;
 
   static const List<String> _rutasDisponibles = ['A', 'B', 'C', 'D'];
@@ -78,8 +81,8 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
 
     _cargarPedidos();
 
-    // Actualizar periódicamente cada 15 segundos
-    _refreshTimer = Timer.periodic(const Duration(seconds: 15), (_) => _cargarPedidos(silent: true));
+    // Actualizar periódicamente cada 6 segundos para detectar cambios del admin rápidamente
+    _refreshTimer = Timer.periodic(const Duration(seconds: 6), (_) => _cargarPedidos(silent: true));
   }
 
   @override
@@ -125,7 +128,15 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
       'D': [],
     };
 
-    final todos = [..._enCamino, ..._asignados, ..._entregados];
+    // Deduplicar pedidos por ID para evitar que un mismo pedido aparezca dos veces
+    final todos = <Pedido>[];
+    final idsVistos = <int>{};
+    for (final p in [..._enCamino, ..._asignados, ..._entregados]) {
+      if (idsVistos.add(p.id)) {
+        todos.add(p);
+      }
+    }
+
     for (final p in todos) {
       final r = (p.ruta ?? 'A').toUpperCase().trim();
       if (map.containsKey(r)) {
@@ -135,9 +146,23 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
       }
     }
 
-    // Ordenar cada ruta por orden ascendente (#1, #2, #3...)
+    // Ordenar cada ruta:
+    // 1. Entregados al final
+    // 2. Emergencias primero
+    // 3. Por orden ascendente (#1, #2, #3...) asignado por el admin
     map.forEach((_, list) {
       list.sort((a, b) {
+        final aEntregado = a.estado == 'Entregado';
+        final bEntregado = b.estado == 'Entregado';
+        if (aEntregado && !bEntregado) return 1;
+        if (!aEntregado && bEntregado) return -1;
+
+        if (a.emergencia && !b.emergencia) return -1;
+        if (!a.emergencia && b.emergencia) return 1;
+
+        if (a.orden > 0 && b.orden > 0 && a.orden != b.orden) {
+          return a.orden.compareTo(b.orden);
+        }
         if (a.orden != b.orden) {
           return a.orden.compareTo(b.orden);
         }
@@ -153,13 +178,27 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
     return _pedidosPorRuta[_rutaSeleccionada] ?? [];
   }
 
-  /// Pedidos pendientes (no entregados) de la ruta activa
+  /// Pedidos pendientes (no entregados) de la ruta activa ordenados estrictamente por el admin
   List<Pedido> get _pedidosPendientesRutaActiva {
     return _pedidosRutaActiva.where((p) => p.estado != 'Entregado').toList()
       ..sort((a, b) {
+        // 1. Pedidos de emergencia siempre van primero
+        if (a.emergencia && !b.emergencia) return -1;
+        if (!a.emergencia && b.emergencia) return 1;
+
+        // 2. Respetar estrictamente el orden (#1, #2, #3...) establecido por el administrador
+        if (a.orden > 0 && b.orden > 0 && a.orden != b.orden) {
+          return a.orden.compareTo(b.orden);
+        }
+
+        // 3. Estado en camino
         if (a.estado == 'En camino' && b.estado != 'En camino') return -1;
         if (b.estado == 'En camino' && a.estado != 'En camino') return 1;
-        return a.orden.compareTo(b.orden);
+
+        if (a.orden != b.orden) {
+          return a.orden.compareTo(b.orden);
+        }
+        return a.id.compareTo(b.id);
       });
   }
 
@@ -184,15 +223,64 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
         _pedidoActivo = null;
         _puntosRutaCalle = [];
         _distanciaKm = null;
+        _ultimoPrimerPedidoId = null;
+        _ultimoOrdenPrimerPedido = null;
       });
       return;
     }
 
-    if (_pedidoActivo == null || !pendientes.any((p) => p.id == _pedidoActivo!.id)) {
+    final nuevoPrimero = pendientes.first;
+
+    // Detectar si el administrador modificó el orden o colocó un nuevo pedido como parada #1
+    final adminCambioOrden = _ultimoPrimerPedidoId != null &&
+        (_ultimoPrimerPedidoId != nuevoPrimero.id || _ultimoOrdenPrimerPedido != nuevoPrimero.orden);
+
+    final requiereNuevoCalculo = _pedidoActivo == null ||
+        !pendientes.any((p) => p.id == _pedidoActivo!.id) ||
+        adminCambioOrden;
+
+    _ultimoPrimerPedidoId = nuevoPrimero.id;
+    _ultimoOrdenPrimerPedido = nuevoPrimero.orden;
+
+    if (requiereNuevoCalculo) {
       setState(() {
-        _pedidoActivo = pendientes.first;
+        _pedidoActivo = nuevoPrimero;
       });
       _calcularRutaCalle(forzar: true);
+
+      // Notificar al motoquero si el administrador reordenó la ruta en tiempo real
+      if (adminCambioOrden && mounted) {
+        ScaffoldMessenger.of(context).hideCurrentSnackBar();
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            backgroundColor: const Color(0xFFE65100),
+            duration: const Duration(seconds: 4),
+            content: Row(
+              children: [
+                const Icon(Icons.alt_route, color: Colors.white),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    '¡Ruta recalculada por administrador!\nSiguiente parada #1: ${nuevoPrimero.cliente?.nombre ?? ""}',
+                    style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        );
+      }
+    } else {
+      // Mantener actualizados los datos del pedido activo si no cambió
+      final pActualizado = pendientes.firstWhere(
+        (p) => p.id == _pedidoActivo!.id,
+        orElse: () => nuevoPrimero,
+      );
+      if (_pedidoActivo != pActualizado) {
+        setState(() {
+          _pedidoActivo = pActualizado;
+        });
+      }
     }
   }
 
@@ -1478,6 +1566,9 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
     }
 
     // 2. Marcadores de los pedidos de la ruta activa con sus números (#1, #2, #3...)
+    final pendientes = _pedidosPendientesRutaActiva;
+    final numerosUsados = <int>{};
+
     for (int i = 0; i < pedidosRuta.length; i++) {
       final p = pedidosRuta[i];
       final c = p.cliente;
@@ -1486,7 +1577,22 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
       final pos = LatLng(c!.latitud!, c.longitud!);
       final esActivo = _pedidoActivo?.id == p.id;
       final esEntregado = p.estado == 'Entregado';
-      final numOrden = p.orden > 0 ? p.orden : (i + 1);
+
+      // Asignar número único consecutivo que coincida con el orden del admin
+      int numBadge = 0;
+      if (!esEntregado) {
+        final idxPendiente = pendientes.indexWhere((item) => item.id == p.id);
+        if (p.orden > 0 && !numerosUsados.contains(p.orden)) {
+          numBadge = p.orden;
+          numerosUsados.add(p.orden);
+        } else {
+          numBadge = idxPendiente >= 0 ? (idxPendiente + 1) : (i + 1);
+          while (numerosUsados.contains(numBadge)) {
+            numBadge++;
+          }
+          numerosUsados.add(numBadge);
+        }
+      }
 
       Color markerColor = colorRuta;
       if (esEntregado) {
@@ -1534,7 +1640,7 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
                   child: esEntregado
                       ? const Icon(Icons.check, color: Colors.white, size: 16)
                       : Text(
-                          '$numOrden',
+                          '$numBadge',
                           style: TextStyle(
                             color: Colors.white,
                             fontSize: esActivo ? 15 : 12,
