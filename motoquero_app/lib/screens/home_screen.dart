@@ -164,7 +164,21 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
   }
 
   void _verificarYActualizarPedidoActivo() {
-    final pendientes = _pedidosPendientesRutaActiva;
+    var pendientes = _pedidosPendientesRutaActiva;
+
+    // Si la ruta actualmente seleccionada no tiene pedidos pendientes,
+    // buscar automáticamente la primera ruta que SÍ tenga entregas pendientes (ej. Ruta C)
+    if (pendientes.isEmpty) {
+      for (final r in _rutasDisponibles) {
+        final pedidosR = _pedidosPorRuta[r] ?? [];
+        if (pedidosR.any((p) => p.estado != 'Entregado')) {
+          _rutaSeleccionada = r;
+          pendientes = _pedidosPendientesRutaActiva;
+          break;
+        }
+      }
+    }
+
     if (pendientes.isEmpty) {
       setState(() {
         _pedidoActivo = null;
@@ -187,22 +201,38 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
   // =========================================================================
 
   Future<void> _iniciarGpsLocal() async {
+    // 1. Obtener de inmediato la última ubicación conocida (cero espera)
+    try {
+      final lastPos = await Geolocator.getLastKnownPosition();
+      if (lastPos != null && mounted) {
+        setState(() {
+          _posicionMoto = LatLng(lastPos.latitude, lastPos.longitude);
+        });
+        _calcularRutaCalle(forzar: true);
+      }
+    } catch (_) {}
+
+    // 2. Obtener posición GPS actual precisa
     try {
       final pos = await Geolocator.getCurrentPosition(
-        locationSettings: const LocationSettings(accuracy: LocationAccuracy.high),
+        locationSettings: const LocationSettings(
+          accuracy: LocationAccuracy.medium,
+          timeLimit: Duration(seconds: 6),
+        ),
       );
       if (mounted) {
         setState(() {
           _posicionMoto = LatLng(pos.latitude, pos.longitude);
         });
-        _calcularRutaCalle();
+        _calcularRutaCalle(forzar: true);
       }
     } catch (_) {}
 
+    // 3. Escuchar flujo de GPS en tiempo real
     _positionStream = Geolocator.getPositionStream(
       locationSettings: const LocationSettings(
         accuracy: LocationAccuracy.high,
-        distanceFilter: 8, // cada 8 metros
+        distanceFilter: 3, // cada 3 metros para reaccionar de inmediato
       ),
     ).listen((pos) {
       if (!mounted) return;
@@ -277,8 +307,22 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
 
   /// Trazado de ruta sobre las calles reales con OSRM
   Future<void> _calcularRutaCalle({bool forzar = false}) async {
-    if (_posicionMoto == null || _pedidoActivo == null) return;
+    if (_pedidoActivo == null) return;
     if (_cargandoRuta && !forzar) return;
+
+    // Si aún no se fijó la moto, obtener de inmediato la última posición conocida
+    if (_posicionMoto == null) {
+      try {
+        final last = await Geolocator.getLastKnownPosition();
+        if (last != null && mounted) {
+          setState(() {
+            _posicionMoto = LatLng(last.latitude, last.longitude);
+          });
+        }
+      } catch (_) {}
+    }
+
+    if (_posicionMoto == null) return;
 
     final c = _pedidoActivo!.cliente;
     if (c == null || c.latitud == null || c.longitud == null) return;
