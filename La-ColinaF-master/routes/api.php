@@ -32,6 +32,7 @@ Route::post('/pedidos/{id}/tomar', [MotoqueroApiController::class, 'tomarPedido'
 Route::post('/pedidos/{id}/rechazar', [MotoqueroApiController::class, 'rechazarPedido']);
 Route::post('/pedidos/{id}/finalizar', [MotoqueroApiController::class, 'finalizarPedido']);
 Route::post('/motoquero/{id}/tomar-ruta', [MotoqueroApiController::class, 'tomarRuta']);
+Route::match(['get', 'post'], '/motoquero/{id}/restaurar-asignados', [MotoqueroApiController::class, 'restaurarAsignados']);
 
 // Subir foto de casa o comprobante
 Route::post('/clientes/{id}/imagen', [MotoqueroApiController::class, 'subirFotoCasa']);

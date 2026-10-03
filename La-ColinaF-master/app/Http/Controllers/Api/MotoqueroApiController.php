@@ -162,12 +162,10 @@ class MotoqueroApiController extends Controller
     public function tomarPedido($id)
     {
         $pedido = Pedido::findOrFail($id);
-        $pedido->estado = 'En camino';
-        $pedido->save();
 
         return response()->json([
             'success' => true,
-            'message' => 'Pedido tomado y en camino.',
+            'message' => 'Pedido en atención.',
             'pedido'  => $this->formatPedido($pedido->fresh(['cliente', 'detalles'])),
         ]);
     }
@@ -190,22 +188,34 @@ class MotoqueroApiController extends Controller
 
     /**
      * Tomar todos los pedidos de una ruta específica
+     * Mantiene los pedidos en 'Asignado' para que sigan visibles y ordenados en el panel del admin
+     * hasta que sean entregados efectivamente.
      */
     public function tomarRuta(Request $request, $id)
     {
         $ruta = $request->input('ruta');
-        $query = Pedido::where('motoquero_id', $id)
-            ->whereIn('estado', ['Asignado', 'Por asignar']);
-
-        if ($ruta) {
-            $query->where('ruta', $ruta);
-        }
-
-        $cant = $query->update(['estado' => 'En camino']);
 
         return response()->json([
             'success'              => true,
-            'message'              => "Ruta $ruta iniciada con $cant pedidos en camino.",
+            'message'              => "Ruta $ruta iniciada.",
+            'pedidos_actualizados' => 0,
+        ]);
+    }
+
+    /**
+     * Restaurar pedidos de 'En camino' de regreso a 'Asignado' para que permanezcan en la lista del admin
+     */
+    public function restaurarAsignados($id)
+    {
+        $hoy = Carbon::today();
+        $cant = Pedido::where('motoquero_id', $id)
+            ->where('estado', 'En camino')
+            ->whereDate('created_at', $hoy)
+            ->update(['estado' => 'Asignado']);
+
+        return response()->json([
+            'success'              => true,
+            'message'              => "$cant pedidos restaurados a Asignado.",
             'pedidos_actualizados' => $cant,
         ]);
     }

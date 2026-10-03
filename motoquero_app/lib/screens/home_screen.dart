@@ -477,12 +477,7 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
       _pedidoProximidadAbiertoId = null;
     });
 
-    // Poner en camino los pedidos asignados de esta ruta
-    await _api.tomarRuta(widget.session.motoquero.id, ruta);
-
-    await _cargarPedidos(silent: true);
-
-    // Cambiar a la pestaña "En Camino" (pestaña 1)
+    // Cambiar a la pestaña "En Camino" (pestaña 1 - Mapa)
     _tabController.animateTo(1);
 
     final pendientes = _pedidosPendientesRutaActiva;
