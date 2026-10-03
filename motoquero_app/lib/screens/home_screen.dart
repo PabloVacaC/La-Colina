@@ -1042,7 +1042,7 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
                         const Icon(Icons.two_wheeler, size: 18),
                         const SizedBox(width: 4),
                         Text('En Camino ($_rutaSeleccionada)'),
-                        if (_enCamino.isNotEmpty) ...[
+                        if (_pedidosPendientesRutaActiva.isNotEmpty) ...[
                           const SizedBox(width: 4),
                           Container(
                             padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
@@ -1051,7 +1051,7 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
                               borderRadius: BorderRadius.circular(10),
                             ),
                             child: Text(
-                              '${_enCamino.length}',
+                              '${_pedidosPendientesRutaActiva.length}',
                               style: const TextStyle(fontSize: 10, color: Colors.white, fontWeight: FontWeight.bold),
                             ),
                           ),
@@ -1562,7 +1562,6 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
 
     // 2. Marcadores de los pedidos de la ruta activa con sus números (#1, #2, #3...)
     final pendientes = _pedidosPendientesRutaActiva;
-    final numerosUsados = <int>{};
 
     for (int i = 0; i < pedidosRuta.length; i++) {
       final p = pedidosRuta[i];
@@ -1573,20 +1572,11 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
       final esActivo = _pedidoActivo?.id == p.id;
       final esEntregado = p.estado == 'Entregado';
 
-      // Asignar número único consecutivo que coincida con el orden del admin
+      // Asignar número único consecutivo que coincida con el orden de paradas de esta ruta (#1, #2, #3...)
       int numBadge = 0;
       if (!esEntregado) {
         final idxPendiente = pendientes.indexWhere((item) => item.id == p.id);
-        if (p.orden > 0 && !numerosUsados.contains(p.orden)) {
-          numBadge = p.orden;
-          numerosUsados.add(p.orden);
-        } else {
-          numBadge = idxPendiente >= 0 ? (idxPendiente + 1) : (i + 1);
-          while (numerosUsados.contains(numBadge)) {
-            numBadge++;
-          }
-          numerosUsados.add(numBadge);
-        }
+        numBadge = idxPendiente >= 0 ? (idxPendiente + 1) : (i + 1);
       }
 
       Color markerColor = colorRuta;

@@ -548,8 +548,9 @@ public function ver_pedidos_motoquero($id, Request $request)
             ->orderBy('orden', 'asc')
             ->get();
 
-        // Obtener el último número de orden ya existente para este motoquero (solo Asignado)
+        // Obtener el último número de orden ya existente para este motoquero Y ESTA RUTA (solo Asignado)
         $ultimoOrden = Pedido::where('motoquero_id', $motoquero_id)
+            ->where('ruta', $ruta)
             ->where('estado', 'Asignado')
             ->whereDate('created_at', today())
             ->max('orden') ?? 0;
@@ -897,18 +898,24 @@ public function toggleNotificacion(Request $request, $pedidoId)
 public function mapaAsignados(Request $request)
 {
     $motoqueroId = $request->motoquero_id;
+    $ruta = $request->ruta;
 
-    $pedidos = Pedido::with('cliente')
+    $query = Pedido::with('cliente')
         ->where('motoquero_id', $motoqueroId)
         ->where('estado', 'Asignado')
-        ->whereDate('updated_at', Carbon::today())   // 👈 FILTRAR SOLO HOY
-        ->orderBy('orden', 'asc')
-        ->get();
+        ->whereDate('updated_at', Carbon::today());
+
+    if (!empty($ruta)) {
+        $query->where('ruta', $ruta);
+    }
+
+    $pedidos = $query->orderBy('orden', 'asc')->get();
 
     $datos = $pedidos->map(function ($pedido) {
         return [
             'id' => $pedido->id,
             'orden' => $pedido->orden,
+            'ruta' => $pedido->ruta,
             'nombre' => $pedido->cliente->nombre ?? 'Sin nombre',
             'latitud' => $pedido->cliente->latitud ?? null,
             'longitud' => $pedido->cliente->longitud ?? null,

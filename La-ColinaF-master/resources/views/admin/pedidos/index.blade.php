@@ -557,6 +557,39 @@
                         
                     </div>
 
+                    {{-- ===================================== --}}
+                    {{-- SELECTOR DE RUTA DEL DISTRIBUIDOR --}}
+                    {{-- ===================================== --}}
+                    @php
+                        $rutaInicial = 'A';
+                        foreach(['A','B','C','D'] as $rCandidate) {
+                            if ($pedidos->where('motoquero_id', $motoquero->id)->where('ruta', $rCandidate)->whereIn('estado', ['Por asignar', 'Asignado', 'En camino'])->count() > 0) {
+                                $rutaInicial = $rCandidate;
+                                break;
+                            }
+                        }
+                    @endphp
+
+                    <div class="ruta-selector-header mb-3 p-2 bg-white rounded border shadow-sm text-center">
+                        <div class="fw-bold small text-muted mb-1">
+                            <i class="fas fa-route text-primary"></i> RUTAS DEL DISTRIBUIDOR
+                        </div>
+                        <div class="btn-group w-100" role="group">
+                            @foreach(['A','B','C','D'] as $r)
+                                @php
+                                    $cntActivos = $pedidos->where('motoquero_id', $motoquero->id)->where('ruta', $r)->whereIn('estado', ['Por asignar', 'Asignado', 'En camino'])->count();
+                                @endphp
+                                <button type="button" 
+                                        class="btn btn-sm btn-outline-primary btn-ruta {{ $r === $rutaInicial ? 'active' : '' }}" 
+                                        data-ruta="{{ $r }}">
+                                    <b>Ruta {{ $r }}</b>
+                                    @if($cntActivos > 0)
+                                        <span class="badge bg-warning text-dark ms-1" style="font-size: 10px;">{{ $cntActivos }}</span>
+                                    @endif
+                                </button>
+                            @endforeach
+                        </div>
+                    </div>
 
             {{-- ===================================== --}}
             {{-- POR ASIGNAR – RUTAS A B C D (VISUAL) --}}
@@ -565,16 +598,14 @@
 
                 <div class="estado-title asignar">🟨 Por asignar</div>
 
-
                     {{-- MAPA POR ASIGNAR --}}
                     <div
                         class="mapa-por-asignar mt-2 mb-2"
                         id="mapa-por-asignar-{{ $motoquero->id }}"
                         data-motoquero="{{ $motoquero->id }}"
-                        data-ruta="A"
+                        data-ruta="{{ $rutaInicial }}"
                         style="height:280px; border-radius:8px; background:#eee;">
                     </div>
-
 
                     <div class="d-flex justify-content-between gap-2 mb-2">
                         <button
@@ -591,13 +622,12 @@
                         </button>
                     </div>
 
-
-                {{-- SELECTOR DE RUTA --}}
+                {{-- SELECTOR DE RUTA INTERNO --}}
                 <div class="ruta-selector mt-2">
-                    <button class="btn btn-sm btn-outline-primary btn-ruta active" data-ruta="A">A</button>
-                    <button class="btn btn-sm btn-outline-primary btn-ruta" data-ruta="B">B</button>
-                    <button class="btn btn-sm btn-outline-primary btn-ruta" data-ruta="C">C</button>
-                    <button class="btn btn-sm btn-outline-primary btn-ruta" data-ruta="D">D</button>
+                    <button class="btn btn-sm btn-outline-primary btn-ruta {{ $rutaInicial === 'A' ? 'active' : '' }}" data-ruta="A">A</button>
+                    <button class="btn btn-sm btn-outline-primary btn-ruta {{ $rutaInicial === 'B' ? 'active' : '' }}" data-ruta="B">B</button>
+                    <button class="btn btn-sm btn-outline-primary btn-ruta {{ $rutaInicial === 'C' ? 'active' : '' }}" data-ruta="C">C</button>
+                    <button class="btn btn-sm btn-outline-primary btn-ruta {{ $rutaInicial === 'D' ? 'active' : '' }}" data-ruta="D">D</button>
                 </div>
 
                 {{-- CONTENEDOR DE RUTAS --}}
@@ -616,7 +646,7 @@
                                 ->values();
                         @endphp
 
-                        <div class="ruta ruta-{{ $ruta }} {{ $ruta === 'A' ? 'active' : '' }}" data-ruta="{{ $ruta }}">
+                        <div class="ruta ruta-{{ $ruta }} {{ $ruta === $rutaInicial ? 'active' : '' }}" data-ruta="{{ $ruta }}">
 
                             @if($porAsignarRuta->count() > 0)
                                 <button
@@ -638,9 +668,9 @@
                                         No hay pedidos en ruta {{ $ruta }}
                                     </div>
                                 @else
-                                    @foreach($porAsignarRuta as $p)
+                                    @foreach($porAsignarRuta as $index => $p)
                                         <div class="pedido-item" data-id="{{ $p->id }}">
-                                            <b>#{{ $p->orden }}</b> – {{ $p->cliente->nombre }}
+                                            <b>#{{ $index + 1 }}</b> – {{ $p->cliente->nombre }}
 
                                             <div>
                                                 <small>
@@ -664,325 +694,315 @@
             </div>
 
             {{-- ===================================== --}}
-            {{-- ASIGNADO --}}
+            {{-- ASIGNADO (SEGREGADO POR RUTA A, B, C, D) --}}
             {{-- ===================================== --}}
             <div class="estado-section">
                 <div class="estado-title asignado">🟦 Asignado</div>
 
+                <div class="rutas-container mt-2">
+                    @foreach(['A','B','C','D'] as $ruta)
+                        @php
+                            $asignadosRuta = $pedidos
+                                ->where('estado','Asignado')
+                                ->where('motoquero_id',$motoquero->id)
+                                ->where('ruta', $ruta)
+                                ->sortBy(function($it) { return $it->orden === null ? PHP_INT_MAX : $it->orden; })
+                                ->values();
+                        @endphp
 
-                <div class="text-center mt-2 mb-2">
-                    <button 
-                        class="btn btn-sm btn-dark btn-ver-mapa-asignados"
-                        data-motoquero="{{ $motoquero->id }}">
-                        🗺 Ver mapa
-                    </button>
-                </div>
+                        <div class="ruta ruta-{{ $ruta }} {{ $ruta === $rutaInicial ? 'active' : '' }}" data-ruta="{{ $ruta }}">
 
-
-                @php
-                    $asignados = $pedidos
-                        ->where('estado','Asignado')
-                        ->where('motoquero_id',$motoquero->id)
-                        ->sortBy(function($it) { return $it->orden === null ? PHP_INT_MAX : $it->orden; })
-                        ->values();
-                
-
-                @endphp
-
-                <div class="mt-2 lista-asignado" data-motoquero="{{ $motoquero->id }}">
-                    @if($asignados->isEmpty())
-                        <div class="pedido-item text-muted">No hay pedidos asignados.</div>
-                    @else
-
-                        @foreach($asignados as $p)
-                            @php
-                                $ultimaCompra = \App\Models\Pedido::with('detalles')
-                                    ->where('cliente_id', $p->cliente_id)
-                                    ->where('estado', 'Entregado')
-                                    ->where('id', '!=', $p->id)
-                                    ->orderBy('updated_at', 'desc')
-                                    ->first();
-                            @endphp
-
-                            <div class="pedido-item pedido-card" data-id="{{ $p->id }}">
-
-                                <b>#{{ $p->orden }}</b> - {{ $p->cliente->nombre }}
-
-                                {{-- GPS --}}
-                                <div>
-                                    <small>
-                                        @if($p->cliente->ubicacion_gps)
-                                            <a href="{{ $p->cliente->ubicacion_gps }}" target="_blank">Ver enlace</a>
-                                        @else
-                                            <span class="text-muted">No registrado</span>
-                                        @endif
-                                    </small>
-                                </div>
-
-                                {{-- ÚLTIMA COMPRA --}}
-                                <div class="mt-1">
-                                    <small><b>Última compra:</b></small>
-                                    @if($ultimaCompra && $ultimaCompra->detalles->count() > 0)
-                                        <ul class="mb-0 ps-3">
-                                            @foreach($ultimaCompra->detalles as $d)
-                                                <li>
-                                                    <small>{{ $d->producto }} × {{ $d->cantidad }}</small>
-                                                </li>
-                                            @endforeach
-                                        </ul>
-                                    @else
-                                        <small class="text-muted">Sin compras anteriores</small>
-                                    @endif
-                                </div>
+                            <div class="d-flex justify-content-between align-items-center mb-2">
+                                <span class="badge bg-primary" style="font-size: 11px;">
+                                    Ruta {{ $ruta }} ({{ $asignadosRuta->count() }} pedidos)
+                                </span>
+                                @if($asignadosRuta->count() > 0)
+                                    <button 
+                                        class="btn btn-xs btn-dark btn-ver-mapa-asignados"
+                                        data-motoquero="{{ $motoquero->id }}"
+                                        data-ruta="{{ $ruta }}">
+                                        🗺 Ver mapa Ruta {{ $ruta }}
+                                    </button>
+                                @endif
                             </div>
-                        @endforeach
 
-                    @endif
+                            <div class="lista-asignado lista-ruta" data-motoquero="{{ $motoquero->id }}" data-ruta="{{ $ruta }}">
+                                @if($asignadosRuta->isEmpty())
+                                    <div class="pedido-item text-muted">No hay pedidos asignados en Ruta {{ $ruta }}.</div>
+                                @else
+                                    @foreach($asignadosRuta as $index => $p)
+                                        @php
+                                            $ultimaCompra = \App\Models\Pedido::with('detalles')
+                                                ->where('cliente_id', $p->cliente_id)
+                                                ->where('estado', 'Entregado')
+                                                ->where('id', '!=', $p->id)
+                                                ->orderBy('updated_at', 'desc')
+                                                ->first();
+                                        @endphp
+
+                                        <div class="pedido-item pedido-card" data-id="{{ $p->id }}">
+
+                                            <b>#{{ $index + 1 }}</b> - {{ $p->cliente->nombre }}
+
+                                            {{-- GPS --}}
+                                            <div>
+                                                <small>
+                                                    @if($p->cliente->ubicacion_gps)
+                                                        <a href="{{ $p->cliente->ubicacion_gps }}" target="_blank">Ver enlace</a>
+                                                    @else
+                                                        <span class="text-muted">No registrado</span>
+                                                    @endif
+                                                </small>
+                                            </div>
+
+                                            {{-- ÚLTIMA COMPRA --}}
+                                            <div class="mt-1">
+                                                <small><b>Última compra:</b></small>
+                                                @if($ultimaCompra && $ultimaCompra->detalles->count() > 0)
+                                                    <ul class="mb-0 ps-3">
+                                                        @foreach($ultimaCompra->detalles as $d)
+                                                            <li>
+                                                                <small>{{ $d->producto }} × {{ $d->cantidad }}</small>
+                                                            </li>
+                                                        @endforeach
+                                                    </ul>
+                                                @else
+                                                    <small class="text-muted">Sin compras anteriores</small>
+                                                @endif
+                                            </div>
+                                        </div>
+                                    @endforeach
+                                @endif
+                            </div>
+
+                        </div>
+                    @endforeach
                 </div>
             </div>
 
             {{-- ===================================== --}}
-            {{-- EN CAMINO --}}
+            {{-- EN CAMINO (SEGREGADO POR RUTA A, B, C, D) --}}
             {{-- ===================================== --}}
             <div class="estado-section">
                 <div class="estado-title camino">🟧 En camino</div>
 
-                @php
-                    $enCamino = $pedidos
-                        ->where('estado','En camino')
-                        ->where('motoquero_id',$motoquero->id)
-                        ->sortByDesc('updated_at')
-                        ->values();
-                @endphp
+                <div class="rutas-container mt-2">
+                    @foreach(['A','B','C','D'] as $ruta)
+                        @php
+                            $enCaminoRuta = $pedidos
+                                ->where('estado','En camino')
+                                ->where('motoquero_id',$motoquero->id)
+                                ->where('ruta', $ruta)
+                                ->sortByDesc('updated_at')
+                                ->values();
+                        @endphp
 
-                <div class="mt-2 lista-en-camino" data-motoquero="{{ $motoquero->id }}">
-                    @if($enCamino->isEmpty())
-                        <div class="pedido-item text-muted">No hay pedidos en camino.</div>
-                    @else
-                        @foreach($enCamino as $index => $p)
+                        <div class="ruta ruta-{{ $ruta }} {{ $ruta === $rutaInicial ? 'active' : '' }}" data-ruta="{{ $ruta }}">
 
-                            <div class="pedido-item mb-3 p-3 border rounded" data-id="{{ $p->id }}">
-                                
-                                <b>{{ $p->cliente->nombre }}</b><br>
-
-                                <div>
-                                    <small>
-                                        @if($p->cliente->ubicacion_gps)
-                                            <a href="{{ $p->cliente->ubicacion_gps }}" target="_blank">Ver enlace</a>
-                                        @else
-                                            <span class="text-muted">No registrado</span>
-                                        @endif
-                                    </small>
-                                </div>
-
-                                @php
-                                    $msgVoy = urlencode("Hola, su pedido ya está en camino a su ubicación. El distribuidor llegará pronto.");
-                                    $msgLlegada = urlencode("Hola, el distribuidor LLEGÓ a su ubicación. Por favor acérquese para recibir el pedido.");
-                                @endphp
-
-
-                                {{-- ================= ACCIONES ================= --}}
-                                <div class="mt-3 p-2 border rounded bg-light">
-
-                                    <div class="row g-2">
-
-                                        {{-- COLUMNA CLIENTE --}}
-                                        <div class="col-6">
-                                            <div class="fw-bold small text-success mb-1">Cliente</div>
-
-                                            <div class="d-grid gap-1">
-
-                                                <a href="https://wa.me/{{ $p->cliente->celular_real }}?text={{ $msgVoy }}"
-                                                target="_blank"
-                                                class="btn btn-success btn-sm py-1"
-                                                style="font-size: 12px;">
-                                                    🚚 En Camino
-                                                </a>
-
-                                                <a href="https://wa.me/{{ $p->cliente->celular_real }}?text={{ $msgLlegada }}"
-                                                target="_blank"
-                                                class="btn btn-warning btn-sm py-1"
-                                                style="font-size: 12px;">
-                                                    📍 Llegada
-                                                </a>
-
-                                            </div>
-                                        </div>
-
-                                        {{-- COLUMNA DISTRIBUIDOR --}}
-                                        <div class="col-6">
-                                            <div class="fw-bold small text-primary mb-1">Distribuidor</div>
-
-                                            <div class="d-grid gap-1">
-
-                                                <button 
-                                                    class="btn btn-primary btn-sm py-1 btn-avisar"
-                                                    style="font-size: 12px;"
-                                                    data-id="{{ $p->id }}"
-                                                    data-tipo="ya_sale">
-                                                    🚀 Ya Sale
-                                                </button>
-
-                                                <button 
-                                                    class="btn btn-danger btn-sm py-1 btn-avisar"
-                                                    style="font-size: 12px;"
-                                                    data-id="{{ $p->id }}"
-                                                    data-tipo="no_contesta">
-                                                    📞 No Contesta
-                                                </button>
-
-                                            </div>
-                                        </div>
-
-                                    </div>
-
-                                </div>
-
+                            <div class="mb-2">
+                                <span class="badge bg-warning text-dark" style="font-size: 11px;">
+                                    Ruta {{ $ruta }} ({{ $enCaminoRuta->count() }} en camino)
+                                </span>
                             </div>
 
-                        @endforeach
-                    @endif
+                            <div class="lista-en-camino" data-motoquero="{{ $motoquero->id }}" data-ruta="{{ $ruta }}">
+                                @if($enCaminoRuta->isEmpty())
+                                    <div class="pedido-item text-muted">No hay pedidos en camino en Ruta {{ $ruta }}.</div>
+                                @else
+                                    @foreach($enCaminoRuta as $index => $p)
+                                        <div class="pedido-item mb-3 p-3 border rounded" data-id="{{ $p->id }}">
+                                            <b>{{ $p->cliente->nombre }}</b><br>
+
+                                            <div>
+                                                <small>
+                                                    @if($p->cliente->ubicacion_gps)
+                                                        <a href="{{ $p->cliente->ubicacion_gps }}" target="_blank">Ver enlace</a>
+                                                    @else
+                                                        <span class="text-muted">No registrado</span>
+                                                    @endif
+                                                </small>
+                                            </div>
+
+                                            @php
+                                                $msgVoy = urlencode("Hola, su pedido ya está en camino a su ubicación. El distribuidor llegará pronto.");
+                                                $msgLlegada = urlencode("Hola, el distribuidor LLEGÓ a su ubicación. Por favor acérquese para recibir el pedido.");
+                                            @endphp
+
+                                            {{-- ================= ACCIONES ================= --}}
+                                            <div class="mt-3 p-2 border rounded bg-light">
+                                                <div class="row g-2">
+                                                    {{-- COLUMNA CLIENTE --}}
+                                                    <div class="col-6">
+                                                        <div class="fw-bold small text-success mb-1">Cliente</div>
+                                                        <div class="d-grid gap-1">
+                                                            <a href="https://wa.me/{{ $p->cliente->celular_real }}?text={{ $msgVoy }}"
+                                                            target="_blank"
+                                                            class="btn btn-success btn-sm py-1"
+                                                            style="font-size: 12px;">
+                                                                🚚 En Camino
+                                                            </a>
+                                                            <a href="https://wa.me/{{ $p->cliente->celular_real }}?text={{ $msgLlegada }}"
+                                                            target="_blank"
+                                                            class="btn btn-warning btn-sm py-1"
+                                                            style="font-size: 12px;">
+                                                                📍 Llegada
+                                                            </a>
+                                                        </div>
+                                                    </div>
+
+                                                    {{-- COLUMNA DISTRIBUIDOR --}}
+                                                    <div class="col-6">
+                                                        <div class="fw-bold small text-primary mb-1">Distribuidor</div>
+                                                        <div class="d-grid gap-1">
+                                                            <button 
+                                                                class="btn btn-primary btn-sm py-1 btn-avisar"
+                                                                style="font-size: 12px;"
+                                                                data-id="{{ $p->id }}"
+                                                                data-tipo="ya_sale">
+                                                                🚀 Ya Sale
+                                                            </button>
+                                                            <button 
+                                                                class="btn btn-danger btn-sm py-1 btn-avisar"
+                                                                style="font-size: 12px;"
+                                                                data-id="{{ $p->id }}"
+                                                                data-tipo="no_contesta">
+                                                                📞 No Contesta
+                                                            </button>
+                                                        </div>
+                                                    </div>
+                                                </div>
+                                            </div>
+                                        </div>
+                                    @endforeach
+                                @endif
+                            </div>
+                        </div>
+                    @endforeach
                 </div>
             </div>
 
+            {{-- ===================================== --}}
+            {{-- ENTREGADO (SEGREGADO POR RUTA A, B, C, D) --}}
+            {{-- ===================================== --}}
+            <div class="estado-section entregado-scroll">
+                <div class="estado-title entregado">🟩 Entregado</div>
 
-                    {{-- ENTREGADO --}}
-                    <div class="estado-section entregado-scroll">
-                        <div class="estado-title entregado">🟩 Entregado</div>
-
+                <div class="rutas-container mt-2">
+                    @foreach(['A','B','C','D'] as $ruta)
                         @php
-                            $entregados = $pedidos->where('estado','Entregado')->where('motoquero_id',$motoquero->id)->sortByDesc('updated_at');
+                            $entregadosRuta = $pedidos
+                                ->where('estado','Entregado')
+                                ->where('motoquero_id',$motoquero->id)
+                                ->where('ruta', $ruta)
+                                ->sortByDesc('updated_at')
+                                ->values();
                         @endphp
 
-                        @if($entregados->isEmpty())
-                            <div class="pedido-item text-muted">No hay pedidos entregados.</div>
-                        @else
-                            @foreach($entregados as $p)
-                            <div class="pedido-item">
+                        <div class="ruta ruta-{{ $ruta }} {{ $ruta === $rutaInicial ? 'active' : '' }}" data-ruta="{{ $ruta }}">
 
-                                
-                                <div class="d-flex justify-content-between align-items-center">
-
-                                    <b>{{ $p->cliente->nombre }}</b>
-
-                                    <button 
-                                        class="btn btn-sm btn-success px-2 py-0 btnEditarEntrega"
-                                        style="font-size:12px;"
-                                        data-id="{{ $p->id }}"
-                                    >
-                                        Editar
-                                    </button>
-
-                                </div>
-                                    
-
-
-                                <small><b>Total:</b> Bs {{ number_format($p->total_precio ?? 0,2) }}</small><br>
-                                <small><b>Pago:</b> {{ $p->metodo_pago ?? 'No definido' }}</small>
-                            
-                                {{-- BOTON - RECIBO --}}
-                                @php
-                                   $lineasProductos = "";
-
-                                foreach ($p->detalles as $detalle) {
-                                    $nombre = $detalle->producto;            // Nombre del producto
-                                    $cantidad = $detalle->cantidad;          // Cantidad
-                                    $precio = $detalle->precio_total;        // Precio total del detalle
-
-                                    // Construimos cada línea del detalle
-                                    $lineasProductos .= "• $nombre — Cant: $cantidad — Bs $precio\n";
-                                }
-
-                                    $total = $p->total_precio;
-                                    $metodo = ucfirst($p->metodo_pago);
-
-                                    // Recibo base
-                                    $mensajeBase =
-                                        "Hola, gracias por su compra 🙌\n\n".
-                                        "🧾 *RECIBO DE COMPRA*\n\n".
-                                    $lineasProductos . "\n".
-                                        "💰 *TOTAL*: Bs $total\n".
-                                        "💳 *Método de pago*: $metodo\n\n".
-                                        "¡Gracias por confiar en nosotros!";
-
-                                    // Si pagó en efectivo → mensaje normal
-                                    if (strtolower($metodo) === 'efectivo') {
-                                        $msgEntrega = urlencode($mensajeBase);
-                                    }
-
-                                    // Si pagó con QR → mensaje + línea + “/” para abrir respuestas rápidas de WhatsApp Business
-                                    else if (strtolower($metodo) === 'qr') {
-                                        $mensajeQR = $mensajeBase . "\n\n/";
-                                        $msgEntrega = urlencode($mensajeQR);
-                                    }
-
-                                    // Cualquier otro método, por si acaso
-                                    else {
-                                        $msgEntrega = urlencode($mensajeBase);
-                                    }
-                                @endphp
-
-
-                                @php
-                                    $totalQR = number_format($p->total_precio ?? 0, 2);
-                                    $mensajeQRDirecto = "/QR $totalQR Bs.";
-                                    $msgQR = urlencode($mensajeQRDirecto);
-                                @endphp
-
-
-                                 <div class="d-flex flex-wrap mt-1" style="gap:5px;">
-
-                                    {{-- BOTÓN RECIBO --}}
-                                    <a href="https://wa.me/{{ $p->cliente->celular_real }}?text={{ $msgEntrega }}"
-                                        target="_blank"
-                                        class="btn btn-primary py-0 px-2"
-                                        style="font-size:11px;">
-                                        <i class="fab fa-whatsapp"></i> Recibo
-                                    </a>
-
-                                    @if(strtolower($p->metodo_pago) === 'qr')
-
-                                        @if(!$p->qr_pago_estado)
-
-                                            {{-- BOTÓN ENVIAR QR --}}
-                                            <a href="https://wa.me/{{ $p->cliente->celular_real }}?text={{ $msgQR }}"
-                                                target="_blank"
-                                                class="btn btn-warning py-0 px-2"
-                                                style="font-size:11px;">
-                                                QR
-                                            </a>
-
-                                            {{-- BOTÓN MARCAR PAGADO CENTRAL --}}
-                                            <button 
-                                                class="btn btn-success py-0 px-2 btnPagadoCentral"
-                                                style="font-size:11px;"
-                                                data-id="{{ $p->id }}">
-                                                Marcar Pagado
-                                            </button>
-
-                                        @elseif($p->qr_pago_estado === 'distribuidor')
-
-                                            <span class="estado-pago distribuidor">
-                                                Pagado al Distribuidor
-                                            </span>
-
-                                        @elseif($p->qr_pago_estado === 'central')
-
-                                            <span class="estado-pago central">
-                                                Pagado a la Central
-                                            </span>
-
-                                        @endif
-
-                                    @endif
-
-                                </div>  
-
-
+                            <div class="mb-2">
+                                <span class="badge bg-success" style="font-size: 11px;">
+                                    Ruta {{ $ruta }} ({{ $entregadosRuta->count() }} entregados)
+                                </span>
                             </div>
-                            @endforeach
-                        @endif
-                    </div>
+
+                            <div class="lista-entregado" data-motoquero="{{ $motoquero->id }}" data-ruta="{{ $ruta }}">
+                                @if($entregadosRuta->isEmpty())
+                                    <div class="pedido-item text-muted">No hay pedidos entregados en Ruta {{ $ruta }}.</div>
+                                @else
+                                    @foreach($entregadosRuta as $p)
+                                        <div class="pedido-item">
+                                            <div class="d-flex justify-content-between align-items-center">
+                                                <b>{{ $p->cliente->nombre }}</b>
+                                                <button 
+                                                    class="btn btn-sm btn-success px-2 py-0 btnEditarEntrega"
+                                                    style="font-size:12px;"
+                                                    data-id="{{ $p->id }}"
+                                                >
+                                                    Editar
+                                                </button>
+                                            </div>
+
+                                            <small><b>Total:</b> Bs {{ number_format($p->total_precio ?? 0,2) }}</small><br>
+                                            <small><b>Pago:</b> {{ $p->metodo_pago ?? 'No definido' }}</small>
+                                        
+                                            {{-- BOTON - RECIBO --}}
+                                            @php
+                                                $lineasProductos = "";
+                                                foreach ($p->detalles as $detalle) {
+                                                    $nombre = $detalle->producto;
+                                                    $cantidad = $detalle->cantidad;
+                                                    $precio = $detalle->precio_total;
+                                                    $lineasProductos .= "• $nombre — Cant: $cantidad — Bs $precio\n";
+                                                }
+
+                                                $total = $p->total_precio;
+                                                $metodo = ucfirst($p->metodo_pago);
+
+                                                $mensajeBase =
+                                                    "Hola, gracias por su compra 🙌\n\n".
+                                                    "🧾 *RECIBO DE COMPRA*\n\n".
+                                                    $lineasProductos . "\n".
+                                                    "💰 *TOTAL*: Bs $total\n".
+                                                    "💳 *Método de pago*: $metodo\n\n".
+                                                    "¡Gracias por confiar en nosotros!";
+
+                                                if (strtolower($metodo) === 'efectivo') {
+                                                    $msgEntrega = urlencode($mensajeBase);
+                                                } else if (strtolower($metodo) === 'qr') {
+                                                    $mensajeQR = $mensajeBase . "\n\n/";
+                                                    $msgEntrega = urlencode($mensajeQR);
+                                                } else {
+                                                    $msgEntrega = urlencode($mensajeBase);
+                                                }
+
+                                                $totalQR = number_format($p->total_precio ?? 0, 2);
+                                                $mensajeQRDirecto = "/QR $totalQR Bs.";
+                                                $msgQR = urlencode($mensajeQRDirecto);
+                                            @endphp
+
+                                            <div class="d-flex flex-wrap mt-1" style="gap:5px;">
+                                                <a href="https://wa.me/{{ $p->cliente->celular_real }}?text={{ $msgEntrega }}"
+                                                    target="_blank"
+                                                    class="btn btn-primary py-0 px-2"
+                                                    style="font-size:11px;">
+                                                    <i class="fab fa-whatsapp"></i> Recibo
+                                                </a>
+
+                                                @if(strtolower($p->metodo_pago) === 'qr')
+                                                    @if(!$p->qr_pago_estado)
+                                                        <a href="https://wa.me/{{ $p->cliente->celular_real }}?text={{ $msgQR }}"
+                                                            target="_blank"
+                                                            class="btn btn-warning py-0 px-2"
+                                                            style="font-size:11px;">
+                                                            QR
+                                                        </a>
+
+                                                        <button 
+                                                            class="btn btn-success py-0 px-2 btnPagadoCentral"
+                                                            style="font-size:11px;"
+                                                            data-id="{{ $p->id }}">
+                                                            Marcar Pagado
+                                                        </button>
+                                                    @elseif($p->qr_pago_estado === 'distribuidor')
+                                                        <span class="estado-pago distribuidor">
+                                                            Pagado al Distribuidor
+                                                        </span>
+                                                    @elseif($p->qr_pago_estado === 'central')
+                                                        <span class="estado-pago central">
+                                                            Pagado a la Central
+                                                        </span>
+                                                    @endif
+                                                @endif
+                                            </div>
+                                        </div>
+                                    @endforeach
+                                @endif
+                            </div>
+                        </div>
+                    @endforeach
+                </div>
+            </div>
 
                 </div>
             </div>
@@ -1040,6 +1060,18 @@
 .ruta { display: none; }
 
 .ruta.active { display: block; }
+
+.btn-ruta.active {
+    background-color: #007bff !important;
+    color: #fff !important;
+    font-weight: bold;
+    box-shadow: 0 2px 4px rgba(0, 123, 255, 0.35);
+}
+
+.ruta-selector-header .btn-ruta {
+    font-size: 12px;
+    padding: 6px 4px;
+}
 
 .lista-ruta { min-height: 80px; border: 1px dashed #ccc; padding: 6px; }
 
@@ -1949,7 +1981,7 @@ document.addEventListener('click', e => {
 
 
 
-function cargarMapaAsignadosModal(motoqueroId){
+function cargarMapaAsignadosModal(motoqueroId, ruta){
 
     modoOrdenModalAsignados = false;
 
@@ -1958,12 +1990,22 @@ function cargarMapaAsignadosModal(motoqueroId){
 
     cont.innerHTML = '';
 
-    fetch(`/admin/pedidos/mapa-asignados?motoquero_id=${motoqueroId}`)
+    const modalTitle = document.querySelector('#modalMapaAsignados .modal-title');
+    if (modalTitle) {
+        modalTitle.innerText = `Mapa de pedidos asignados ${ruta ? '- Ruta ' + ruta : ''}`;
+    }
+
+    let url = `/admin/pedidos/mapa-asignados?motoquero_id=${motoqueroId}`;
+    if (ruta) {
+        url += `&ruta=${encodeURIComponent(ruta)}`;
+    }
+
+    fetch(url)
     .then(r => r.json())
     .then(pedidos => {
 
         if(!pedidos.length){
-            cont.innerHTML = '<p class="text-muted">Sin pedidos asignados</p>';
+            cont.innerHTML = `<p class="text-muted p-3">Sin pedidos asignados ${ruta ? 'en Ruta ' + ruta : ''}</p>`;
             return;
         }
 
@@ -2061,46 +2103,39 @@ document.addEventListener('click', function (e) {
 
     // 🔹 Activar botón SOLO en este motoquero
     motoqueroCard.querySelectorAll('.btn-ruta').forEach(b => {
-        b.classList.remove('active');
+        b.classList.toggle('active', b.dataset.ruta === ruta);
     });
-    btn.classList.add('active');
 
-    // 🔹 Mostrar SOLO la ruta correspondiente en este motoquero
+    // 🔹 Mostrar SOLO la ruta correspondiente en este motoquero en TODAS las secciones
     motoqueroCard.querySelectorAll('.ruta').forEach(r => {
         r.classList.toggle('active', r.dataset.ruta === ruta);
-
-
     });
 
+    const mapaPorAsignar = motoqueroCard.querySelector('.mapa-por-asignar');
+    if (mapaPorAsignar) {
+        const motoqueroId = mapaPorAsignar.dataset.motoquero;
+        mapaPorAsignar.dataset.ruta = ruta;
+        cargarMapaPorAsignar(motoqueroId, ruta);
+    }
 
-    const motoqueroId =
-        motoqueroCard
-            .querySelector('.mapa-por-asignar')
-            .dataset.motoquero;
-
-    cargarMapaPorAsignar(motoqueroId, ruta);
-
-
+    actualizarBotonEmergencia();
 });
-
 </script>
 
-
-
 <script>
-
 document.addEventListener('click',function(e){
 
     const btn = e.target.closest('.btn-ver-mapa-asignados');
     if(!btn) return;
 
     const motoqueroId = btn.dataset.motoquero;
+    const ruta = btn.dataset.ruta || '';
 
     const modal = new bootstrap.Modal(document.getElementById('modalMapaAsignados'));
     modal.show();
 
     setTimeout(()=>{
-        cargarMapaAsignadosModal(motoqueroId);
+        cargarMapaAsignadosModal(motoqueroId, ruta);
     },300);
 
 });
@@ -2250,8 +2285,8 @@ function actualizarBotonEmergencia() {
     // Quitar todos los botones existentes
     document.querySelectorAll('.btn-emergencia-bar').forEach(b => b.remove());
 
-    // Recorremos cada lista de ASIGNADOS
-    document.querySelectorAll('.lista-asignado').forEach(lista => {
+    // Recorremos cada lista de ASIGNADOS dentro de una ruta activa
+    document.querySelectorAll('.ruta.active .lista-asignado').forEach(lista => {
 
         const primerPedido = lista.querySelector('.pedido-item');
 
@@ -2350,7 +2385,7 @@ document.addEventListener('DOMContentLoaded', function() {
             draggable: '.pedido-item',
 
             group: {
-                name: 'solo-orden',
+                name: 'solo-orden-' + (el.dataset.motoquero || '') + '-' + (el.dataset.ruta || ''),
                 pull: false,
                 put: false
             },
