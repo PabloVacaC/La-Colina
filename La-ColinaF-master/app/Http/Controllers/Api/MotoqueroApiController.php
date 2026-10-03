@@ -81,33 +81,19 @@ class MotoqueroApiController extends Controller
 
         $hoy = Carbon::today();
 
-        // Pedidos Asignados (por tomar/aceptar) del turno de hoy
+        // Pedidos Asignados (por tomar/aceptar): Todos los pedidos pendientes asignados a este repartidor
         $asignados = Pedido::with(['cliente', 'detalles'])
             ->where('motoquero_id', $motoqueroId)
             ->whereIn('estado', ['Asignado', 'Por asignar'])
-            ->where(function ($q) use ($hoy) {
-                $q->whereDate('created_at', $hoy)
-                  ->orWhere(function ($sub) use ($hoy) {
-                      $sub->whereDate('updated_at', $hoy)
-                          ->whereDate('created_at', '>=', $hoy->copy()->subDays(2));
-                  });
-            })
             ->orderBy('orden', 'asc')
             ->orderBy('id', 'asc')
             ->get()
             ->map(fn($p) => $this->formatPedido($p));
 
-        // Pedidos En Camino (activos) del turno de hoy
+        // Pedidos En Camino (activos): Todos los pedidos actualmente en curso de este repartidor
         $enCamino = Pedido::with(['cliente', 'detalles'])
             ->where('motoquero_id', $motoqueroId)
             ->where('estado', 'En camino')
-            ->where(function ($q) use ($hoy) {
-                $q->whereDate('created_at', $hoy)
-                  ->orWhere(function ($sub) use ($hoy) {
-                      $sub->whereDate('updated_at', $hoy)
-                          ->whereDate('created_at', '>=', $hoy->copy()->subDays(2));
-                  });
-            })
             ->orderBy('orden', 'asc')
             ->orderBy('updated_at', 'desc')
             ->get()
