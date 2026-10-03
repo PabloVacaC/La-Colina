@@ -177,6 +177,12 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
     return _pedidosPorRuta[_rutaSeleccionada] ?? [];
   }
 
+  /// Solo las rutas que tienen pedidos formalmente asignados por el administrador
+  List<String> get _rutasAsignadasDisponibles {
+    final porRuta = _pedidosPorRuta;
+    return _rutasDisponibles.where((r) => (porRuta[r] ?? []).isNotEmpty).toList();
+  }
+
   /// Pedidos pendientes (no entregados) de la ruta activa ordenados estrictamente por el admin
   List<Pedido> get _pedidosPendientesRutaActiva {
     return _pedidosRutaActiva.where((p) => p.estado != 'Entregado').toList()
@@ -201,12 +207,29 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
   }
 
   void _verificarYActualizarPedidoActivo() {
+    final rutasValidas = _rutasAsignadasDisponibles;
+
+    if (rutasValidas.isEmpty) {
+      setState(() {
+        _pedidoActivo = null;
+        _puntosRutaCalle = [];
+        _distanciaKm = null;
+        _ultimoFingerprintSecuencia = null;
+      });
+      return;
+    }
+
+    // Si la ruta actualmente seleccionada no está entre las asignadas, cambiar a la primera asignada
+    if (!rutasValidas.contains(_rutaSeleccionada)) {
+      _rutaSeleccionada = rutasValidas.first;
+    }
+
     var pendientes = _pedidosPendientesRutaActiva;
 
-    // Si la ruta actualmente seleccionada no tiene pedidos pendientes,
-    // buscar automáticamente la primera ruta que SÍ tenga entregas pendientes (ej. Ruta C)
+    // Si la ruta actualmente seleccionada no tiene pedidos pendientes de entregar,
+    // buscar automáticamente la primera ruta asignada que SÍ tenga entregas pendientes (ej. Ruta C)
     if (pendientes.isEmpty) {
-      for (final r in _rutasDisponibles) {
+      for (final r in rutasValidas) {
         final pedidosR = _pedidosPorRuta[r] ?? [];
         if (pedidosR.any((p) => p.estado != 'Entregado')) {
           _rutaSeleccionada = r;
@@ -1216,6 +1239,60 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
 
   Widget _buildTabRutas() {
     final porRuta = _pedidosPorRuta;
+    final rutasVisibles = _rutasAsignadasDisponibles;
+
+    if (rutasVisibles.isEmpty) {
+      return RefreshIndicator(
+        onRefresh: () => _cargarPedidos(),
+        child: ListView(
+          padding: const EdgeInsets.all(24),
+          children: [
+            const SizedBox(height: 70),
+            Center(
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Container(
+                    padding: const EdgeInsets.all(22),
+                    decoration: BoxDecoration(
+                      color: Colors.blue.shade50,
+                      shape: BoxShape.circle,
+                    ),
+                    child: Icon(Icons.assignment_outlined, size: 60, color: Colors.blue.shade700),
+                  ),
+                  const SizedBox(height: 20),
+                  const Text(
+                    'Sin rutas asignadas',
+                    style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+                  ),
+                  const SizedBox(height: 8),
+                  const Padding(
+                    padding: EdgeInsets.symmetric(horizontal: 20),
+                    child: Text(
+                      'No tienes pedidos asignados en este momento.\n'
+                      'En cuanto el administrador asigne pedidos a tu ruta, aparecerán aquí automáticamente en tiempo real.',
+                      textAlign: TextAlign.center,
+                      style: TextStyle(color: Colors.grey, fontSize: 13, height: 1.4),
+                    ),
+                  ),
+                  const SizedBox(height: 24),
+                  ElevatedButton.icon(
+                    onPressed: () => _cargarPedidos(),
+                    icon: const Icon(Icons.refresh, color: Colors.white),
+                    label: const Text('ACTUALIZAR', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: const Color(0xFF0D47A1),
+                      padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      );
+    }
 
     return RefreshIndicator(
       onRefresh: () => _cargarPedidos(),
@@ -1235,7 +1312,7 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
                 SizedBox(width: 10),
                 Expanded(
                   child: Text(
-                    'Selecciona la ruta con la que empezarás a distribuir para ver el mapa de entregas.',
+                    'Rutas asignadas por el administrador para distribución hoy.',
                     style: TextStyle(fontSize: 13, color: Color(0xFF0D47A1), fontWeight: FontWeight.w600),
                   ),
                 ),
@@ -1244,8 +1321,8 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
           ),
           const SizedBox(height: 12),
 
-          // Lista de las 4 rutas: Ruta A, Ruta B, Ruta C, Ruta D
-          for (final ruta in _rutasDisponibles)
+          // Solo mostrar las rutas asignadas por el administrador
+          for (final ruta in rutasVisibles)
             _buildTarjetaRuta(ruta, porRuta[ruta] ?? []),
         ],
       ),
@@ -1529,10 +1606,9 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
   // =========================================================================
 
   Widget _buildTabEnCaminoMapa() {
-    final pedidosRuta = _pedidosRutaActiva;
-    final colorRuta = _coloresRuta[_rutaSeleccionada] ?? const Color(0xFF1E88E5);
+    final rutasDisponibles = _rutasAsignadasDisponibles;
 
-    if (pedidosRuta.isEmpty) {
+    if (rutasDisponibles.isEmpty) {
       return Center(
         child: Padding(
           padding: const EdgeInsets.all(24),
@@ -1541,29 +1617,35 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
             children: [
               Icon(Icons.map_outlined, size: 70, color: Colors.grey.shade400),
               const SizedBox(height: 16),
-              Text(
-                'No hay pedidos registrados en la Ruta $_rutaSeleccionada.',
-                style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+              const Text(
+                'Sin rutas asignadas para reparto',
+                style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
                 textAlign: TextAlign.center,
               ),
               const SizedBox(height: 8),
               const Text(
-                'Selecciona una ruta en la pestaña "Rutas" para comenzar a entregar.',
+                'El mapa se activará automáticamente cuando el administrador te asigne una ruta de entrega.',
                 style: TextStyle(color: Colors.grey, fontSize: 13),
                 textAlign: TextAlign.center,
               ),
               const SizedBox(height: 20),
               ElevatedButton.icon(
-                onPressed: () => _tabController.animateTo(0),
-                icon: const Icon(Icons.alt_route, color: Colors.white),
-                label: const Text('VER RUTAS DISPONIBLES', style: TextStyle(color: Colors.white)),
-                style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF0D47A1)),
+                onPressed: () => _cargarPedidos(),
+                icon: const Icon(Icons.refresh, color: Colors.white),
+                label: const Text('ACTUALIZAR ESTADO', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: const Color(0xFF0D47A1),
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                ),
               ),
             ],
           ),
         ),
       );
     }
+
+    final pedidosRuta = _pedidosRutaActiva;
+    final colorRuta = _coloresRuta[_rutaSeleccionada] ?? const Color(0xFF1E88E5);
 
     // Coordenadas para marcadores en el mapa
     final markers = <Marker>[];
@@ -1742,11 +1824,13 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
                   ),
                   child: DropdownButtonHideUnderline(
                     child: DropdownButton<String>(
-                      value: _rutaSeleccionada,
+                      value: rutasDisponibles.contains(_rutaSeleccionada)
+                          ? _rutaSeleccionada
+                          : (rutasDisponibles.isNotEmpty ? rutasDisponibles.first : null),
                       isDense: true,
                       icon: Icon(Icons.arrow_drop_down, color: colorRuta),
                       style: TextStyle(fontWeight: FontWeight.bold, color: colorRuta, fontSize: 13),
-                      items: _rutasDisponibles.map((r) {
+                      items: rutasDisponibles.map((r) {
                         return DropdownMenuItem(
                           value: r,
                           child: Text('Ruta $r'),

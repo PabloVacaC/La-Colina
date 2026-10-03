@@ -81,10 +81,10 @@ class MotoqueroApiController extends Controller
 
         $hoy = Carbon::today();
 
-        // Pedidos Asignados (por tomar/aceptar): Todos los pedidos pendientes asignados a este repartidor
+        // Pedidos Asignados (por tomar/aceptar): Solo pedidos confirmados en estado 'Asignado' por el administrador
         $asignados = Pedido::with(['cliente', 'detalles'])
             ->where('motoquero_id', $motoqueroId)
-            ->whereIn('estado', ['Asignado', 'Por asignar'])
+            ->where('estado', 'Asignado')
             ->orderBy('orden', 'asc')
             ->orderBy('id', 'asc')
             ->get()
@@ -364,7 +364,7 @@ class MotoqueroApiController extends Controller
 
         // 3. Conteo de pedidos pendientes asignados (1 consulta agrupada)
         $pedidosAsignadosCount = Pedido::whereIn('motoquero_id', $ids)
-            ->whereIn('estado', ['Asignado', 'Por asignar'])
+            ->where('estado', 'Asignado')
             ->groupBy('motoquero_id')
             ->selectRaw('motoquero_id, count(*) as total')
             ->pluck('total', 'motoquero_id');
