@@ -221,11 +221,18 @@ class PedidoController extends Controller
 }
 
     
-        public function actualizarOrden(Request $request)
+    public function actualizarOrden(Request $request)
     {
-        foreach ($request->orden as $item) {
-            Pedido::where('id', $item['id'])
-                ->update(['orden' => $item['posicion']]);
+        if ($request->has('orden') && is_array($request->orden)) {
+            foreach ($request->orden as $item) {
+                if (isset($item['id']) && isset($item['posicion'])) {
+                    Pedido::where('id', $item['id'])
+                        ->update([
+                            'orden' => $item['posicion'],
+                            'updated_at' => now(),
+                        ]);
+                }
+            }
         }
 
         return response()->json(['success' => true]);

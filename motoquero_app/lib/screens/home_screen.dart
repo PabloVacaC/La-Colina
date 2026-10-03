@@ -53,8 +53,7 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
   int? _pedidoProximidadAbiertoId;
   DateTime? _ultimoCalculoRuta;
 
-  int? _ultimoPrimerPedidoId;
-  int? _ultimoOrdenPrimerPedido;
+  String? _ultimoFingerprintSecuencia;
 
   Timer? _refreshTimer;
 
@@ -81,8 +80,8 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
 
     _cargarPedidos();
 
-    // Actualizar periódicamente cada 6 segundos para detectar cambios del admin rápidamente
-    _refreshTimer = Timer.periodic(const Duration(seconds: 6), (_) => _cargarPedidos(silent: true));
+    // Actualizar periódicamente cada 3 segundos para detectar cambios del admin rápidamente en tiempo real
+    _refreshTimer = Timer.periodic(const Duration(seconds: 3), (_) => _cargarPedidos(silent: true));
   }
 
   @override
@@ -148,8 +147,8 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
 
     // Ordenar cada ruta:
     // 1. Entregados al final
-    // 2. Emergencias primero
-    // 3. Por orden ascendente (#1, #2, #3...) asignado por el admin
+    // 2. Por orden ascendente (#1, #2, #3...) asignado por el admin
+    // 3. Emergencias si no tienen orden distinto
     map.forEach((_, list) {
       list.sort((a, b) {
         final aEntregado = a.estado == 'Entregado';
@@ -157,15 +156,15 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
         if (aEntregado && !bEntregado) return 1;
         if (!aEntregado && bEntregado) return -1;
 
-        if (a.emergencia && !b.emergencia) return -1;
-        if (!a.emergencia && b.emergencia) return 1;
-
         if (a.orden > 0 && b.orden > 0 && a.orden != b.orden) {
           return a.orden.compareTo(b.orden);
         }
-        if (a.orden != b.orden) {
-          return a.orden.compareTo(b.orden);
-        }
+        if (a.orden > 0 && b.orden <= 0) return -1;
+        if (a.orden <= 0 && b.orden > 0) return 1;
+
+        if (a.emergencia && !b.emergencia) return -1;
+        if (!a.emergencia && b.emergencia) return 1;
+
         return a.id.compareTo(b.id);
       });
     });
@@ -182,22 +181,21 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
   List<Pedido> get _pedidosPendientesRutaActiva {
     return _pedidosRutaActiva.where((p) => p.estado != 'Entregado').toList()
       ..sort((a, b) {
-        // 1. Pedidos de emergencia siempre van primero
-        if (a.emergencia && !b.emergencia) return -1;
-        if (!a.emergencia && b.emergencia) return 1;
-
-        // 2. Respetar estrictamente el orden (#1, #2, #3...) establecido por el administrador
+        // 1. Respetar estrictamente el orden (#1, #2, #3...) establecido por el administrador
         if (a.orden > 0 && b.orden > 0 && a.orden != b.orden) {
           return a.orden.compareTo(b.orden);
         }
+        if (a.orden > 0 && b.orden <= 0) return -1;
+        if (a.orden <= 0 && b.orden > 0) return 1;
+
+        // 2. Pedidos de emergencia si no tienen orden distinto
+        if (a.emergencia && !b.emergencia) return -1;
+        if (!a.emergencia && b.emergencia) return 1;
 
         // 3. Estado en camino
         if (a.estado == 'En camino' && b.estado != 'En camino') return -1;
         if (b.estado == 'En camino' && a.estado != 'En camino') return 1;
 
-        if (a.orden != b.orden) {
-          return a.orden.compareTo(b.orden);
-        }
         return a.id.compareTo(b.id);
       });
   }
@@ -223,24 +221,24 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
         _pedidoActivo = null;
         _puntosRutaCalle = [];
         _distanciaKm = null;
-        _ultimoPrimerPedidoId = null;
-        _ultimoOrdenPrimerPedido = null;
+        _ultimoFingerprintSecuencia = null;
       });
       return;
     }
 
-    final nuevoPrimero = pendientes.first;
+    // Huella digital de toda la secuencia de pedidos y sus órdenes
+    final fingerprintActual = pendientes.map((p) => '${p.id}:${p.orden}:${p.emergencia}').join('|');
 
-    // Detectar si el administrador modificó el orden o colocó un nuevo pedido como parada #1
-    final adminCambioOrden = _ultimoPrimerPedidoId != null &&
-        (_ultimoPrimerPedidoId != nuevoPrimero.id || _ultimoOrdenPrimerPedido != nuevoPrimero.orden);
+    final adminCambioSecuencia = _ultimoFingerprintSecuencia != null &&
+        _ultimoFingerprintSecuencia != fingerprintActual;
+
+    final nuevoPrimero = pendientes.first;
 
     final requiereNuevoCalculo = _pedidoActivo == null ||
         !pendientes.any((p) => p.id == _pedidoActivo!.id) ||
-        adminCambioOrden;
+        adminCambioSecuencia;
 
-    _ultimoPrimerPedidoId = nuevoPrimero.id;
-    _ultimoOrdenPrimerPedido = nuevoPrimero.orden;
+    _ultimoFingerprintSecuencia = fingerprintActual;
 
     if (requiereNuevoCalculo) {
       setState(() {
@@ -249,7 +247,8 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
       _calcularRutaCalle(forzar: true);
 
       // Notificar al motoquero si el administrador reordenó la ruta en tiempo real
-      if (adminCambioOrden && mounted) {
+      if (adminCambioSecuencia && mounted) {
+        HapticFeedback.mediumImpact();
         ScaffoldMessenger.of(context).hideCurrentSnackBar();
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
@@ -261,7 +260,7 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
                 const SizedBox(width: 8),
                 Expanded(
                   child: Text(
-                    '¡Ruta recalculada por administrador!\nSiguiente parada #1: ${nuevoPrimero.cliente?.nombre ?? ""}',
+                    '¡Orden de ruta actualizado por el administrador!\nSiguiente parada #${nuevoPrimero.orden > 0 ? nuevoPrimero.orden : 1}: ${nuevoPrimero.cliente?.nombre ?? ""}',
                     style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13),
                   ),
                 ),
@@ -393,10 +392,20 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
     }
   }
 
-  /// Trazado de ruta sobre las calles reales con OSRM
+  /// Trazado de ruta sobre las calles reales con OSRM conectando paradas en orden
   Future<void> _calcularRutaCalle({bool forzar = false}) async {
-    if (_pedidoActivo == null) return;
     if (_cargandoRuta && !forzar) return;
+
+    final pendientes = _pedidosPendientesRutaActiva;
+    if (pendientes.isEmpty) {
+      if (mounted) {
+        setState(() {
+          _puntosRutaCalle = [];
+          _distanciaKm = null;
+        });
+      }
+      return;
+    }
 
     // Si aún no se fijó la moto, obtener de inmediato la última posición conocida
     if (_posicionMoto == null) {
@@ -412,30 +421,62 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
 
     if (_posicionMoto == null) return;
 
-    final c = _pedidoActivo!.cliente;
-    if (c == null || c.latitud == null || c.longitud == null) return;
+    // Construir la lista de paradas en el orden estricto de entrega
+    final paradasConCoords = <LatLng>[];
+
+    // Si el usuario seleccionó un pedido activo específico que no es el primero,
+    // ese va como destino inmediato:
+    if (_pedidoActivo != null && _pedidoActivo != pendientes.first) {
+      final cActivo = _pedidoActivo!.cliente;
+      if (cActivo?.latitud != null && cActivo?.longitud != null && cActivo!.latitud != 0 && cActivo.longitud != 0) {
+        paradasConCoords.add(LatLng(cActivo.latitud!, cActivo.longitud!));
+      }
+    }
+
+    // Agregar todas las paradas pendientes en el orden de entrega programado
+    for (final p in pendientes) {
+      final c = p.cliente;
+      if (c?.latitud != null && c?.longitud != null && c!.latitud != 0 && c.longitud != 0) {
+        final pos = LatLng(c.latitud!, c.longitud!);
+        if (!paradasConCoords.contains(pos)) {
+          paradasConCoords.add(pos);
+        }
+      }
+    }
+
+    if (paradasConCoords.isEmpty) return;
 
     _ultimoCalculoRuta = DateTime.now();
-    final destino = LatLng(c.latitud!, c.longitud!);
-
     setState(() => _cargandoRuta = true);
 
+    // Coordenadas completas: Moto -> Parada 1 -> Parada 2 -> Parada 3...
+    final waypoints = <LatLng>[_posicionMoto!, ...paradasConCoords];
+
     try {
+      final coordsParam = waypoints
+          .map((w) => '${w.longitude},${w.latitude}')
+          .join(';');
+
       final url = Uri.parse(
-        'https://router.project-osrm.org/route/v1/driving/'
-        '${_posicionMoto!.longitude},${_posicionMoto!.latitude};'
-        '${destino.longitude},${destino.latitude}'
-        '?overview=full&geometries=geojson',
+        'https://router.project-osrm.org/route/v1/driving/$coordsParam?overview=full&geometries=geojson',
       );
 
-      final resp = await http.get(url).timeout(const Duration(seconds: 4));
+      final resp = await http.get(url).timeout(const Duration(seconds: 5));
       if (resp.statusCode == 200) {
         final data = json.decode(resp.body);
         final routes = data['routes'] as List?;
         if (routes != null && routes.isNotEmpty) {
           final geom = routes[0]['geometry'];
           final coords = geom['coordinates'] as List;
-          final distMetros = (routes[0]['distance'] as num?)?.toDouble() ?? 0.0;
+
+          // Distancia de la primera pierna (de la moto a la siguiente parada)
+          double distMetros = 0.0;
+          final legs = routes[0]['legs'] as List?;
+          if (legs != null && legs.isNotEmpty) {
+            distMetros = (legs[0]['distance'] as num?)?.toDouble() ?? 0.0;
+          } else {
+            distMetros = (routes[0]['distance'] as num?)?.toDouble() ?? 0.0;
+          }
 
           if (mounted) {
             setState(() {
@@ -451,16 +492,17 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
       }
     } catch (_) {}
 
-    // Fallback en línea recta
+    // Fallback si OSRM no responde o falla la red: unir puntos secuencialmente
     if (mounted) {
+      final primerDestino = paradasConCoords.first;
       final distMetros = Geolocator.distanceBetween(
         _posicionMoto!.latitude,
         _posicionMoto!.longitude,
-        destino.latitude,
-        destino.longitude,
+        primerDestino.latitude,
+        primerDestino.longitude,
       );
       setState(() {
-        _puntosRutaCalle = [_posicionMoto!, destino];
+        _puntosRutaCalle = waypoints;
         _distanciaKm = distMetros / 1000.0;
         _cargandoRuta = false;
       });
@@ -1576,7 +1618,7 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
       int numBadge = 0;
       if (!esEntregado) {
         final idxPendiente = pendientes.indexWhere((item) => item.id == p.id);
-        numBadge = idxPendiente >= 0 ? (idxPendiente + 1) : (i + 1);
+        numBadge = p.orden > 0 ? p.orden : (idxPendiente >= 0 ? (idxPendiente + 1) : (i + 1));
       }
 
       Color markerColor = colorRuta;
@@ -1790,12 +1832,16 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
                   child: Container(
                     padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
                     decoration: BoxDecoration(
-                      color: const Color(0xFFFFF3E0),
+                      color: p.emergencia ? const Color(0xFFFFEBEE) : const Color(0xFFFFF3E0),
                       borderRadius: BorderRadius.circular(6),
                     ),
                     child: Text(
-                      'Pedido #${p.id} • Orden #${p.orden}',
-                      style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 12, color: Color(0xFFEF6C00)),
+                      '${p.emergencia ? "🚨 EMERGENCIA • " : ""}Pedido #${p.id} • Parada #${p.orden > 0 ? p.orden : 1}${_distanciaKm != null ? " • ${_distanciaKm!.toStringAsFixed(1)} km" : ""}',
+                      style: TextStyle(
+                        fontWeight: FontWeight.bold,
+                        fontSize: 12,
+                        color: p.emergencia ? Colors.red.shade900 : const Color(0xFFEF6C00),
+                      ),
                       overflow: TextOverflow.ellipsis,
                     ),
                   ),
