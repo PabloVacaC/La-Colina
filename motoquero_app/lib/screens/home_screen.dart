@@ -1382,13 +1382,7 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
       clean = '591$clean';
     }
 
-    final distribuidor = widget.session.motoquero.nombres.trim().isNotEmpty
-        ? widget.session.motoquero.nombres.trim()
-        : (widget.session.motoquero.nombreCompleto.trim().isNotEmpty
-            ? widget.session.motoquero.nombreCompleto.trim()
-            : widget.session.userName);
-
-    final mensaje = "👋 Hola, soy el Distribuidor $distribuidor de Agua La Colina.\n\n"
+    final mensaje = "👋 Hola, soy el Distribuidor de Agua La Colina.\n\n"
         "🚚 Ya llegué a su ubicación para entregarle su pedido. Por favor, acérquese para recibirlo.\n\n"
         "¡Gracias! 😊";
 

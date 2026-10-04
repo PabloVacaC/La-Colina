@@ -376,8 +376,7 @@
                 if (strlen($celularCliente) == 8) {
                     $celularCliente = '591' . $celularCliente;
                 }
-                $distribuidorNombre = $motoquero->nombres ?? auth()->user()->name ?? '';
-                $mensajeWhatsAppCliente = "👋 Hola, soy el Distribuidor " . $distribuidorNombre . " de Agua La Colina.\n\n"
+                $mensajeWhatsAppCliente = "👋 Hola, soy el Distribuidor de Agua La Colina.\n\n"
                                         . "🚚 Ya llegué a su ubicación para entregarle su pedido. Por favor, acérquese para recibirlo.\n\n"
                                         . "¡Gracias! 😊";
                 $urlWhatsApp = "https://wa.me/" . $celularCliente . "?text=" . urlencode($mensajeWhatsAppCliente);
