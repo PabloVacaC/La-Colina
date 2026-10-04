@@ -360,6 +360,60 @@ class _MapaRutaScreenState extends State<MapaRutaScreen> {
     }
   }
 
+  Future<void> _enviarWhatsAppLlegadaCliente(Cliente? cliente) async {
+    final cel = (cliente?.celular ?? '').trim();
+    if (cel.isEmpty) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('⚠️ El cliente no tiene número de teléfono registrado.'),
+            backgroundColor: Colors.orange,
+          ),
+        );
+      }
+      return;
+    }
+
+    String clean = cel.replaceAll(RegExp(r'[^0-9]'), '');
+    if (clean.length == 8) {
+      clean = '591$clean';
+    }
+
+    final distribuidor = widget.session.motoquero.nombres.trim().isNotEmpty
+        ? widget.session.motoquero.nombres.trim()
+        : (widget.session.motoquero.nombreCompleto.trim().isNotEmpty
+            ? widget.session.motoquero.nombreCompleto.trim()
+            : widget.session.userName);
+
+    final mensaje = "👋 Hola, soy el Distribuidor $distribuidor de Agua La Colina.\n\n"
+        "🚚 Ya llegué a su ubicación para entregarle su pedido. Por favor, acérquese para recibirlo.\n\n"
+        "¡Gracias! 😊";
+
+    final uri = Uri.parse('https://wa.me/$clean?text=${Uri.encodeComponent(mensaje)}');
+
+    try {
+      final ok = await launchUrl(uri, mode: LaunchMode.externalApplication);
+      if (!ok) {
+        final okFallback = await launchUrl(uri, mode: LaunchMode.platformDefault);
+        if (!okFallback) {
+          throw Exception('No se pudo abrir WhatsApp');
+        }
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('No se pudo abrir WhatsApp ($e). Abriendo llamada telefónica...'),
+            backgroundColor: Colors.orange,
+          ),
+        );
+      }
+      if (cliente != null) {
+        await _llamarCliente(cliente.celular);
+      }
+    }
+  }
+
   Future<void> _tomarPedido(Pedido pedido) async {
     final success = await _api.tomarPedido(pedido.id);
     if (success) {
@@ -910,15 +964,15 @@ class _MapaRutaScreenState extends State<MapaRutaScreen> {
             // Botones de acción rápida estilo GPS
             Row(
               children: [
-                // Botón Llamar
+                // Botón WhatsApp Avisar Llegada
                 IconButton.filledTonal(
                   style: IconButton.styleFrom(
                     backgroundColor: const Color(0xFFE8F5E9),
                     foregroundColor: const Color(0xFF2E7D32),
                   ),
-                  onPressed: () => _llamarCliente(cliente.celular),
-                  icon: const Icon(Icons.phone),
-                  tooltip: 'Llamar al cliente',
+                  onPressed: () => _enviarWhatsAppLlegadaCliente(cliente),
+                  icon: const Icon(Icons.chat),
+                  tooltip: 'Avisar llegada por WhatsApp',
                 ),
                 const SizedBox(width: 6),
 

@@ -372,12 +372,25 @@
 
 
                 @php
+                $celularCliente = preg_replace('/\D/', '', $pedido->cliente->celular_real ?? $pedido->cliente->celular ?? '');
+                if (strlen($celularCliente) == 8) {
+                    $celularCliente = '591' . $celularCliente;
+                }
+                $distribuidorNombre = $motoquero->nombres ?? auth()->user()->name ?? '';
+                $mensajeWhatsAppCliente = "👋 Hola, soy el Distribuidor " . $distribuidorNombre . " de Agua La Colina.\n\n"
+                                        . "🚚 Ya llegué a su ubicación para entregarle su pedido. Por favor, acérquese para recibirlo.\n\n"
+                                        . "¡Gracias! 😊";
+                $urlWhatsApp = "https://wa.me/" . $celularCliente . "?text=" . urlencode($mensajeWhatsAppCliente);
+
                 $msgLlegué = "Llegué a la ubicación: " . $pedido->cliente->nombre . ",   ". "+"  . $pedido->cliente->celular_real . ",  ". "https://wa.me/" . $pedido->cliente->celular_real . "?text=Hola,%20el%20distribuidor%20LLEGÓ%20a%20su%20ubicación.%20Por%20favor%20acérquese%20para%20recibir%20el%20pedido." ;                           
                 $msgLlegué = urlencode($msgLlegué);
                 @endphp
 
-                
-                    <a href="https://wa.me/59163524474?text={{ $msgLlegué }}" onclick="marcarPedidoEntregando({{ $pedido->id }})" target="_blank" class="btn btn-success btn-sm">
+                    <a href="{{ $urlWhatsApp }}" target="_blank" onclick="marcarPedidoEntregando({{ $pedido->id }})" class="btn btn-success btn-sm" title="Enviar WhatsApp de llegada al cliente">
+                        <i class="fab fa-whatsapp"></i> Llamar
+                    </a>
+
+                    <a href="https://wa.me/59163524474?text={{ $msgLlegué }}" onclick="marcarPedidoEntregando({{ $pedido->id }})" target="_blank" class="btn btn-info btn-sm">
                         <i class="fab fa-whatsapp"></i> Chat Central
                     </a>
                 

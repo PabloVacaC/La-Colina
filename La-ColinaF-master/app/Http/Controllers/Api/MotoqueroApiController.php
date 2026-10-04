@@ -545,7 +545,7 @@ class MotoqueroApiController extends Controller
             'cliente'                       => $cliente ? [
                 'id'                 => $cliente->id,
                 'nombre'             => $cliente->nombre,
-                'celular'            => $cliente->celular,
+                'celular'            => $cliente->celular_real ?? $cliente->celular,
                 'referencia_celular' => $cliente->referencia_celular,
                 'direccion'          => $cliente->direccion,
                 'latitud'            => $cliente->latitud ? (float) $cliente->latitud : null,

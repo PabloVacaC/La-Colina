@@ -1035,14 +1035,15 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
                           const SizedBox(width: 10),
                           Expanded(
                             child: ElevatedButton.icon(
-                              onPressed: () => _llamarCliente(c?.celular),
-                              icon: const Icon(Icons.phone, size: 16, color: Colors.white),
+                              onPressed: () => _enviarWhatsAppLlegadaCliente(c),
+                              onLongPress: () => _llamarCliente(c?.celular),
+                              icon: const Icon(Icons.chat, size: 16, color: Colors.white),
                               label: const Text(
-                                'LLAMAR',
+                                'WHATSAPP',
                                 style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 13),
                               ),
                               style: ElevatedButton.styleFrom(
-                                backgroundColor: const Color(0xFF00897B), // Verde azulado / teal
+                                backgroundColor: const Color(0xFF25D366), // Verde oficial WhatsApp
                                 padding: const EdgeInsets.symmetric(vertical: 12),
                                 shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
                               ),
@@ -1359,6 +1360,58 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
     final url = Uri.parse('tel:$clean');
     if (await canLaunchUrl(url)) {
       await launchUrl(url);
+    }
+  }
+
+  Future<void> _enviarWhatsAppLlegadaCliente(Cliente? cliente) async {
+    final cel = (cliente?.celular ?? '').trim();
+    if (cel.isEmpty) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('⚠️ El cliente no tiene número de teléfono registrado.'),
+            backgroundColor: Colors.orange,
+          ),
+        );
+      }
+      return;
+    }
+
+    String clean = cel.replaceAll(RegExp(r'[^0-9]'), '');
+    if (clean.length == 8) {
+      clean = '591$clean';
+    }
+
+    final distribuidor = widget.session.motoquero.nombres.trim().isNotEmpty
+        ? widget.session.motoquero.nombres.trim()
+        : (widget.session.motoquero.nombreCompleto.trim().isNotEmpty
+            ? widget.session.motoquero.nombreCompleto.trim()
+            : widget.session.userName);
+
+    final mensaje = "👋 Hola, soy el Distribuidor $distribuidor de Agua La Colina.\n\n"
+        "🚚 Ya llegué a su ubicación para entregarle su pedido. Por favor, acérquese para recibirlo.\n\n"
+        "¡Gracias! 😊";
+
+    final uri = Uri.parse('https://wa.me/$clean?text=${Uri.encodeComponent(mensaje)}');
+
+    try {
+      final ok = await launchUrl(uri, mode: LaunchMode.externalApplication);
+      if (!ok) {
+        final okFallback = await launchUrl(uri, mode: LaunchMode.platformDefault);
+        if (!okFallback) {
+          throw Exception('No se pudo abrir WhatsApp');
+        }
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('No se pudo abrir WhatsApp ($e). Abriendo llamada telefónica...'),
+            backgroundColor: Colors.orange,
+          ),
+        );
+      }
+      await _llamarCliente(cliente?.celular);
     }
   }
 
@@ -2437,12 +2490,12 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
                 const SizedBox(width: 8),
                 IconButton(
                   style: IconButton.styleFrom(
-                    backgroundColor: const Color(0xFF00897B),
+                    backgroundColor: const Color(0xFF25D366),
                     shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
                   ),
-                  icon: const Icon(Icons.phone, color: Colors.white, size: 18),
-                  tooltip: 'Llamar al cliente',
-                  onPressed: () => _llamarCliente(c?.celular),
+                  icon: const Icon(Icons.chat, color: Colors.white, size: 18),
+                  tooltip: 'Avisar llegada por WhatsApp',
+                  onPressed: () => _enviarWhatsAppLlegadaCliente(c),
                 ),
                 const SizedBox(width: 4),
                 IconButton(
@@ -3437,7 +3490,6 @@ class _DialogoFinalizarDia extends StatefulWidget {
   final UserSession session;
 
   const _DialogoFinalizarDia({
-    super.key,
     required this.pedidos,
     required this.api,
     required this.session,
