@@ -942,10 +942,8 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
                         children: [
                           Expanded(
                             child: ElevatedButton.icon(
-                              onPressed: () {
-                                Navigator.pop(ctx);
-                              },
-                              icon: const Icon(Icons.navigation, size: 16, color: Colors.white),
+                              onPressed: () => _mostrarUbicacionEnGoogleMaps(c),
+                              icon: const Icon(Icons.map, size: 16, color: Colors.white),
                               label: const Text(
                                 'MAPA GPS',
                                 style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 13),
@@ -1287,7 +1285,17 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
   }
 
   Future<void> _abrirNavegacionExterna(Cliente? cliente) async {
-    if (cliente?.latitud == null || cliente?.longitud == null) return;
+    if (cliente?.latitud == null || cliente?.longitud == null) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Este cliente no tiene coordenadas GPS registradas.'),
+            backgroundColor: Colors.orange,
+          ),
+        );
+      }
+      return;
+    }
     final lat = cliente!.latitud!;
     final lng = cliente.longitud!;
 
@@ -1302,6 +1310,47 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
       }
     } catch (_) {
       await launchUrl(webUrl, mode: LaunchMode.externalApplication);
+    }
+  }
+
+  /// Abre Google Maps mostrando únicamente el marcador/ubicación del cliente en el mapa
+  /// sin iniciar la ruta de navegación automática ("solo mostrar").
+  Future<void> _mostrarUbicacionEnGoogleMaps(Cliente? cliente) async {
+    if (cliente?.latitud == null || cliente?.longitud == null) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Este cliente no tiene coordenadas GPS registradas.'),
+            backgroundColor: Colors.orange,
+          ),
+        );
+      }
+      return;
+    }
+    final lat = cliente!.latitud!;
+    final lng = cliente.longitud!;
+    final nombre = Uri.encodeComponent(cliente.nombre.isNotEmpty ? cliente.nombre : 'Cliente');
+
+    // geo:0,0?q=lat,lng(label) muestra el pin directamente en Google Maps sin iniciar navegación
+    final geoUrl = Uri.parse('geo:0,0?q=$lat,$lng($nombre)');
+    final webUrl = Uri.parse('https://www.google.com/maps/search/?api=1&query=$lat,$lng');
+
+    try {
+      if (await canLaunchUrl(geoUrl)) {
+        await launchUrl(geoUrl, mode: LaunchMode.externalApplication);
+      } else {
+        await launchUrl(webUrl, mode: LaunchMode.externalApplication);
+      }
+    } catch (_) {
+      try {
+        await launchUrl(webUrl, mode: LaunchMode.externalApplication);
+      } catch (e) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('No se pudo abrir Google Maps: $e')),
+          );
+        }
+      }
     }
   }
 
