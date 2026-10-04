@@ -2602,6 +2602,28 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
             ),
           ),
 
+          // Botón Finalizar Día / Reporte y Rendición
+          Container(
+            margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+            width: double.infinity,
+            child: ElevatedButton.icon(
+              style: ElevatedButton.styleFrom(
+                backgroundColor: const Color(0xFF2E7D32),
+                foregroundColor: Colors.white,
+                padding: const EdgeInsets.symmetric(vertical: 13, horizontal: 16),
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                elevation: 3,
+              ),
+              icon: const Icon(Icons.flag_circle_rounded, color: Colors.amberAccent, size: 22),
+              label: const Text(
+                'FINALIZAR DÍA / RENDICIÓN DE GASTOS',
+                style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13, letterSpacing: 0.3),
+              ),
+              onPressed: () => _abrirModalFinalizarDia(listaFiltrada),
+            ),
+          ),
+          const SizedBox(height: 4),
+
           // Filtro por Ruta (Todas, A, B, C, D)
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 14),
@@ -2699,6 +2721,19 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
             ),
           ),
         ],
+      ),
+    );
+  }
+
+  void _abrirModalFinalizarDia(List<Pedido> pedidosEntregados) {
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (ctx) => _DialogoFinalizarDia(
+        pedidos: pedidosEntregados,
+        api: _api,
+        session: widget.session,
       ),
     );
   }
@@ -3373,6 +3408,800 @@ class _DialogoFinalizarEntregaState extends State<_DialogoFinalizarEntrega> {
           ),
         ),
       ),
+    );
+  }
+}
+
+/// Elemento auxiliar para cada fila de gasto (Combustible u Otros)
+class _GastoItem {
+  final TextEditingController conceptoController;
+  final TextEditingController montoController;
+
+  _GastoItem({required String concepto, double monto = 0.0})
+      : conceptoController = TextEditingController(text: concepto),
+        montoController = TextEditingController(text: monto > 0 ? monto.toStringAsFixed(2) : '');
+
+  double get monto => double.tryParse(montoController.text.trim()) ?? 0.0;
+  String get concepto => conceptoController.text.trim();
+
+  void dispose() {
+    conceptoController.dispose();
+    montoController.dispose();
+  }
+}
+
+/// Modal completo de Finalizar Día y Rendición de Gastos para el motoquero
+class _DialogoFinalizarDia extends StatefulWidget {
+  final List<Pedido> pedidos;
+  final ApiService api;
+  final UserSession session;
+
+  const _DialogoFinalizarDia({
+    super.key,
+    required this.pedidos,
+    required this.api,
+    required this.session,
+  });
+
+  @override
+  State<_DialogoFinalizarDia> createState() => _DialogoFinalizarDiaState();
+}
+
+class _DialogoFinalizarDiaState extends State<_DialogoFinalizarDia> {
+  final List<_GastoItem> _combustibles = [];
+  final List<_GastoItem> _otrosGastos = [];
+  bool _cargando = false;
+  bool _guardando = false;
+  String _telefonoEmpresa = '59163524474';
+  final String _nombreEmpresa = 'La Colina';
+
+  int _botellonesNormales = 0;
+  int _alcalinas = 0;
+  int _enterosNormales = 0;
+  int _enterosAlcalinas = 0;
+  int _dispensers = 0;
+
+  double _totalEfectivo = 0.0;
+  double _totalQR = 0.0;
+  double _totalIngresos = 0.0;
+
+  @override
+  void initState() {
+    super.initState();
+    _calcularTotalesVenta();
+    // Iniciar con 1 fila de combustible
+    _combustibles.add(_GastoItem(concepto: 'Combustible', monto: 0.0));
+    _cargarCierreExistente();
+  }
+
+  @override
+  void dispose() {
+    for (final g in _combustibles) {
+      g.dispose();
+    }
+    for (final g in _otrosGastos) {
+      g.dispose();
+    }
+    super.dispose();
+  }
+
+  void _calcularTotalesVenta() {
+    _botellonesNormales = 0;
+    _alcalinas = 0;
+    _enterosNormales = 0;
+    _enterosAlcalinas = 0;
+    _dispensers = 0;
+    _totalEfectivo = 0.0;
+    _totalQR = 0.0;
+
+    for (final p in widget.pedidos) {
+      final met = (p.metodoPago ?? '').toLowerCase();
+      if (met.contains('qr') || met.contains('transf')) {
+        _totalQR += p.totalPrecio;
+      } else {
+        _totalEfectivo += p.totalPrecio;
+      }
+
+      for (final d in p.detalles) {
+        final nom = d.producto.toLowerCase().trim();
+        if (nom == 'agua regular') {
+          _botellonesNormales += d.cantidad;
+        } else if (nom == 'agua alcalina') {
+          _alcalinas += d.cantidad;
+        } else if (nom.contains('regular') && (nom.contains('entero') || nom.contains('botell'))) {
+          _enterosNormales += d.cantidad;
+        } else if (nom.contains('alcalina') && (nom.contains('entero') || nom.contains('botell'))) {
+          _enterosAlcalinas += d.cantidad;
+        } else if (nom.contains('dispensador') || nom.contains('bomba') || nom.contains('bombita')) {
+          _dispensers += d.cantidad;
+        }
+      }
+    }
+    _totalIngresos = _totalEfectivo + _totalQR;
+  }
+
+  Future<void> _cargarCierreExistente() async {
+    try {
+      setState(() => _cargando = true);
+      final res = await widget.api.getCierreDia(widget.session.motoquero.id);
+      if (res != null && res['success'] == true) {
+        if (res['telefono_empresa'] != null && res['telefono_empresa'].toString().isNotEmpty) {
+          _telefonoEmpresa = res['telefono_empresa'].toString();
+        }
+        final cierre = res['cierre_existente'];
+        if (cierre != null && cierre['gastos'] is List && (cierre['gastos'] as List).isNotEmpty) {
+          for (final g in _combustibles) {
+            g.dispose();
+          }
+          for (final g in _otrosGastos) {
+            g.dispose();
+          }
+          _combustibles.clear();
+          _otrosGastos.clear();
+          for (final g in cierre['gastos']) {
+            final c = (g['concepto'] ?? '').toString();
+            final m = (g['monto'] as num?)?.toDouble() ?? 0.0;
+            if (c.toLowerCase().contains('combustible')) {
+              _combustibles.add(_GastoItem(concepto: c, monto: m));
+            } else {
+              _otrosGastos.add(_GastoItem(concepto: c, monto: m));
+            }
+          }
+          if (_combustibles.isEmpty) {
+            _combustibles.add(_GastoItem(concepto: 'Combustible', monto: 0.0));
+          }
+        }
+      }
+    } catch (_) {
+      // Ignorar fallas al precargar
+    } finally {
+      if (mounted) setState(() => _cargando = false);
+    }
+  }
+
+  double get _totalGastosCombustible => _combustibles.fold(0.0, (acc, item) => acc + item.monto);
+  double get _totalGastosOtros => _otrosGastos.fold(0.0, (acc, item) => acc + item.monto);
+  double get _totalGastos => _totalGastosCombustible + _totalGastosOtros;
+  double get _totalAEntregarEfectivo => (_totalEfectivo - _totalGastos).clamp(0.0, double.infinity);
+
+  List<Map<String, dynamic>> _obtenerGastosPayload() {
+    final list = <Map<String, dynamic>>[];
+    for (int i = 0; i < _combustibles.length; i++) {
+      final g = _combustibles[i];
+      if (g.monto > 0) {
+        String c = g.concepto;
+        if (c.isEmpty) c = _combustibles.length > 1 ? 'Combustible #${i + 1}' : 'Combustible';
+        list.add({'concepto': c, 'monto': g.monto});
+      }
+    }
+    for (final g in _otrosGastos) {
+      if (g.monto > 0) {
+        final c = g.concepto.isNotEmpty ? g.concepto : 'Otro gasto';
+        list.add({'concepto': c, 'monto': g.monto});
+      }
+    }
+    return list;
+  }
+
+  String _construirTextoReporte() {
+    final now = DateTime.now();
+    final fechaStr = "${now.day.toString().padLeft(2, '0')}/${now.month.toString().padLeft(2, '0')}/${now.year}";
+    final repartidor = widget.session.motoquero.nombreCompleto;
+
+    final sb = StringBuffer();
+    sb.writeln('📋 *CIERRE DE VENTAS DEL DÍA*');
+    sb.writeln('📅 *Fecha:* $fechaStr');
+    sb.writeln('🛵 *Distribuidor:* $repartidor');
+    sb.writeln('🏢 *Empresa:* $_nombreEmpresa');
+    sb.writeln('━━━━━━━━━━━━━━━━━━━━');
+    sb.writeln('📦 *PRODUCTOS VENDIDOS:*');
+    sb.writeln('• Botellones normales: $_botellonesNormales');
+    sb.writeln('• Alcalinas: $_alcalinas');
+    sb.writeln('• Enteros normales: $_enterosNormales');
+    sb.writeln('• Enteros alcalinas: $_enterosAlcalinas');
+    sb.writeln('• Dispensers: $_dispensers');
+    sb.writeln('━━━━━━━━━━━━━━━━━━━━');
+    sb.writeln('💰 *RESUMEN DE INGRESOS:*');
+    sb.writeln('💵 Total Efectivo: Bs. ${_totalEfectivo.toStringAsFixed(2)}');
+    sb.writeln('📱 Total en QR: Bs. ${_totalQR.toStringAsFixed(2)}');
+    sb.writeln('💎 Total Ingresos: Bs. ${_totalIngresos.toStringAsFixed(2)}');
+    sb.writeln('━━━━━━━━━━━━━━━━━━━━');
+    sb.writeln('⛽ *GASTOS REGISTRADOS:*');
+
+    final payload = _obtenerGastosPayload();
+    if (payload.isEmpty) {
+      sb.writeln('• Sin gastos registrados');
+    } else {
+      for (final g in payload) {
+        sb.writeln('• ${g['concepto']}: Bs. ${(g['monto'] as double).toStringAsFixed(2)}');
+      }
+    }
+    sb.writeln('🔻 Total Gastos: Bs. ${_totalGastos.toStringAsFixed(2)}');
+    sb.writeln('━━━━━━━━━━━━━━━━━━━━');
+    sb.writeln('💵 *TOTAL A ENTREGAR EN EFECTIVO:*');
+    sb.writeln('👉 *Bs. ${_totalAEntregarEfectivo.toStringAsFixed(2)}*');
+    sb.writeln('━━━━━━━━━━━━━━━━━━━━');
+
+    return sb.toString();
+  }
+
+  Future<void> _enviarWhatsApp() async {
+    final rep = _construirTextoReporte();
+    final cleanPhone = _telefonoEmpresa.replaceAll(RegExp(r'[^0-9]'), '');
+    final uri = Uri.parse('https://wa.me/$cleanPhone?text=${Uri.encodeComponent(rep)}');
+    try {
+      final ok = await launchUrl(uri, mode: LaunchMode.externalApplication);
+      if (!ok) {
+        await launchUrl(uri, mode: LaunchMode.platformDefault);
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('No se pudo abrir WhatsApp: $e')),
+        );
+      }
+    }
+  }
+
+  void _copiarReporte() {
+    final rep = _construirTextoReporte();
+    Clipboard.setData(ClipboardData(text: rep));
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Text('📋 Reporte copiado al portapapeles.'),
+        backgroundColor: Color(0xFF1E88E5),
+        duration: Duration(seconds: 2),
+      ),
+    );
+  }
+
+  Future<void> _guardarCierre() async {
+    setState(() => _guardando = true);
+    try {
+      final payload = _obtenerGastosPayload();
+      await widget.api.finalizarDia(
+        motoqueroId: widget.session.motoquero.id,
+        gastos: payload,
+      );
+      if (mounted) {
+        setState(() => _guardando = false);
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('✅ Cierre y gastos guardados correctamente.'),
+            backgroundColor: Color(0xFF2E7D32),
+          ),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        setState(() => _guardando = false);
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Error al guardar cierre: $e'),
+            backgroundColor: Colors.redAccent,
+          ),
+        );
+      }
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      height: MediaQuery.of(context).size.height * 0.92,
+      decoration: const BoxDecoration(
+        color: Color(0xFFF5F7FA),
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      child: Column(
+        children: [
+          // Header
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+            decoration: const BoxDecoration(
+              color: Color(0xFF1B5E20),
+              borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+            ),
+            child: Row(
+              children: [
+                const Icon(Icons.flag_circle_rounded, color: Colors.amberAccent, size: 24),
+                const SizedBox(width: 8),
+                const Expanded(
+                  child: Text(
+                    'Finalizar Día / Rendición',
+                    style: TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold),
+                  ),
+                ),
+                IconButton(
+                  icon: const Icon(Icons.close, color: Colors.white),
+                  onPressed: () => Navigator.pop(context),
+                ),
+              ],
+            ),
+          ),
+
+          if (_cargando)
+            const LinearProgressIndicator(color: Colors.amberAccent),
+
+          Expanded(
+            child: ListView(
+              padding: const EdgeInsets.all(12),
+              children: [
+                // 1. Resumen de productos vendidos
+                _buildCardProductos(),
+                const SizedBox(height: 10),
+
+                // 2. Resumen financiero
+                _buildCardFinanciero(),
+                const SizedBox(height: 10),
+
+                // 3. Gastos de Combustible
+                _buildCardCombustibles(),
+                const SizedBox(height: 10),
+
+                // 4. Otros Gastos
+                _buildCardOtrosGastos(),
+                const SizedBox(height: 10),
+
+                // 5. Total Liquidación en Efectivo
+                _buildCardLiquidacion(),
+                const SizedBox(height: 16),
+
+                // 6. Botones de acción
+                _buildBotonesAccion(),
+                const SizedBox(height: 20),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildCardProductos() {
+    return Card(
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+      elevation: 2,
+      child: Padding(
+        padding: const EdgeInsets.all(12),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                const Text(
+                  '📦 PRODUCTOS VENDIDOS',
+                  style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13, color: Color(0xFF0D47A1)),
+                ),
+                Text(
+                  '${widget.pedidos.length} entregas',
+                  style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 12, color: Colors.black54),
+                ),
+              ],
+            ),
+            const Divider(height: 16),
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: [
+                _buildBadgeItem('Botellón Normal', '$_botellonesNormales', const Color(0xFF1E88E5), Icons.water_drop),
+                _buildBadgeItem('Alcalina', '$_alcalinas', const Color(0xFF00ACC1), Icons.water),
+                _buildBadgeItem('Entero Normal', '$_enterosNormales', const Color(0xFF43A047), Icons.add_circle_outline),
+                _buildBadgeItem('Entero Alcalina', '$_enterosAlcalinas', const Color(0xFFFB8C00), Icons.star_border),
+                _buildBadgeItem('Dispensers', '$_dispensers', const Color(0xFF8E24AA), Icons.local_drink),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildBadgeItem(String titulo, String cantidad, Color color, IconData icon) {
+    return Container(
+      width: (MediaQuery.of(context).size.width - 56) / 2,
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+      decoration: BoxDecoration(
+        color: color.withOpacity(0.08),
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: color.withOpacity(0.3)),
+      ),
+      child: Row(
+        children: [
+          Icon(icon, color: color, size: 20),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(titulo, style: TextStyle(color: color, fontSize: 11, fontWeight: FontWeight.w600), overflow: TextOverflow.ellipsis),
+                Text(cantidad, style: TextStyle(color: color, fontSize: 17, fontWeight: FontWeight.bold)),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildCardFinanciero() {
+    return Card(
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+      elevation: 2,
+      child: Padding(
+        padding: const EdgeInsets.all(12),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text(
+              '💰 RESUMEN DE INGRESOS',
+              style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13, color: Color(0xFF2E7D32)),
+            ),
+            const Divider(height: 16),
+            Row(
+              children: [
+                Expanded(
+                  child: Container(
+                    padding: const EdgeInsets.all(8),
+                    decoration: BoxDecoration(color: Colors.green.shade50, borderRadius: BorderRadius.circular(8)),
+                    child: Column(
+                      children: [
+                        const Text('💵 Efectivo', style: TextStyle(fontSize: 11, color: Colors.green, fontWeight: FontWeight.w600)),
+                        Text('Bs. ${_totalEfectivo.toStringAsFixed(2)}', style: const TextStyle(fontSize: 15, fontWeight: FontWeight.bold, color: Colors.green)),
+                      ],
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Container(
+                    padding: const EdgeInsets.all(8),
+                    decoration: BoxDecoration(color: Colors.blue.shade50, borderRadius: BorderRadius.circular(8)),
+                    child: Column(
+                      children: [
+                        const Text('📱 QR / Transf.', style: TextStyle(fontSize: 11, color: Colors.blue, fontWeight: FontWeight.w600)),
+                        Text('Bs. ${_totalQR.toStringAsFixed(2)}', style: const TextStyle(fontSize: 15, fontWeight: FontWeight.bold, color: Colors.blue)),
+                      ],
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Container(
+                    padding: const EdgeInsets.all(8),
+                    decoration: BoxDecoration(color: Colors.grey.shade100, borderRadius: BorderRadius.circular(8)),
+                    child: Column(
+                      children: [
+                        const Text('Total Bruto', style: TextStyle(fontSize: 11, color: Colors.black87, fontWeight: FontWeight.w600)),
+                        Text('Bs. ${_totalIngresos.toStringAsFixed(2)}', style: const TextStyle(fontSize: 15, fontWeight: FontWeight.bold, color: Colors.black87)),
+                      ],
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildCardCombustibles() {
+    return Card(
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+      elevation: 2,
+      child: Padding(
+        padding: const EdgeInsets.all(12),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                const Row(
+                  children: [
+                    Icon(Icons.local_gas_station, color: Color(0xFFD84315), size: 18),
+                    SizedBox(width: 6),
+                    Text(
+                      'GASTOS EN COMBUSTIBLE',
+                      style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13, color: Color(0xFFD84315)),
+                    ),
+                  ],
+                ),
+                Text(
+                  'Total: Bs. ${_totalGastosCombustible.toStringAsFixed(2)}',
+                  style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 12, color: Color(0xFFD84315)),
+                ),
+              ],
+            ),
+            const Divider(height: 16),
+            for (int i = 0; i < _combustibles.length; i++) ...[
+              Padding(
+                padding: const EdgeInsets.only(bottom: 8),
+                child: Row(
+                  children: [
+                    Expanded(
+                      flex: 5,
+                      child: TextField(
+                        controller: _combustibles[i].conceptoController,
+                        decoration: InputDecoration(
+                          isDense: true,
+                          contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                          border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
+                          labelText: 'Detalle (${i + 1})',
+                        ),
+                        onChanged: (_) => setState(() {}),
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      flex: 4,
+                      child: TextField(
+                        controller: _combustibles[i].montoController,
+                        keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                        decoration: InputDecoration(
+                          isDense: true,
+                          contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                          border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
+                          prefixText: 'Bs. ',
+                          labelText: 'Monto',
+                        ),
+                        onChanged: (_) => setState(() {}),
+                      ),
+                    ),
+                    if (_combustibles.length > 1)
+                      IconButton(
+                        icon: const Icon(Icons.remove_circle, color: Colors.redAccent, size: 20),
+                        onPressed: () {
+                          setState(() {
+                            _combustibles[i].dispose();
+                            _combustibles.removeAt(i);
+                          });
+                        },
+                      ),
+                  ],
+                ),
+              ),
+            ],
+            Align(
+              alignment: Alignment.centerLeft,
+              child: TextButton.icon(
+                style: TextButton.styleFrom(foregroundColor: const Color(0xFFD84315)),
+                icon: const Icon(Icons.add, size: 18),
+                label: const Text('+ Agregar combustible', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12)),
+                onPressed: () {
+                  setState(() {
+                    _combustibles.add(_GastoItem(
+                      concepto: 'Combustible #${_combustibles.length + 1}',
+                      monto: 0.0,
+                    ));
+                  });
+                },
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildCardOtrosGastos() {
+    return Card(
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+      elevation: 2,
+      child: Padding(
+        padding: const EdgeInsets.all(12),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                const Row(
+                  children: [
+                    Icon(Icons.more_horiz, color: Color(0xFF455A64), size: 18),
+                    SizedBox(width: 6),
+                    Text(
+                      'OTROS GASTOS',
+                      style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13, color: Color(0xFF455A64)),
+                    ),
+                  ],
+                ),
+                Text(
+                  'Total: Bs. ${_totalGastosOtros.toStringAsFixed(2)}',
+                  style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 12, color: Color(0xFF455A64)),
+                ),
+              ],
+            ),
+            const Divider(height: 16),
+            if (_otrosGastos.isEmpty)
+              const Padding(
+                padding: EdgeInsets.symmetric(vertical: 4),
+                child: Text('No hay otros gastos agregados.', style: TextStyle(color: Colors.grey, fontSize: 12)),
+              ),
+            for (int i = 0; i < _otrosGastos.length; i++) ...[
+              Padding(
+                padding: const EdgeInsets.only(bottom: 8),
+                child: Row(
+                  children: [
+                    Expanded(
+                      flex: 5,
+                      child: TextField(
+                        controller: _otrosGastos[i].conceptoController,
+                        decoration: InputDecoration(
+                          isDense: true,
+                          contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                          border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
+                          labelText: 'Concepto (Ej: Pinchazo)',
+                        ),
+                        onChanged: (_) => setState(() {}),
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      flex: 4,
+                      child: TextField(
+                        controller: _otrosGastos[i].montoController,
+                        keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                        decoration: InputDecoration(
+                          isDense: true,
+                          contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                          border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
+                          prefixText: 'Bs. ',
+                          labelText: 'Monto',
+                        ),
+                        onChanged: (_) => setState(() {}),
+                      ),
+                    ),
+                    IconButton(
+                      icon: const Icon(Icons.remove_circle, color: Colors.redAccent, size: 20),
+                      onPressed: () {
+                        setState(() {
+                          _otrosGastos[i].dispose();
+                          _otrosGastos.removeAt(i);
+                        });
+                      },
+                    ),
+                  ],
+                ),
+              ),
+            ],
+            Align(
+              alignment: Alignment.centerLeft,
+              child: TextButton.icon(
+                style: TextButton.styleFrom(foregroundColor: const Color(0xFF455A64)),
+                icon: const Icon(Icons.add, size: 18),
+                label: const Text('+ Agregar otro gasto', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12)),
+                onPressed: () {
+                  setState(() {
+                    _otrosGastos.add(_GastoItem(concepto: '', monto: 0.0));
+                  });
+                },
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildCardLiquidacion() {
+    return Card(
+      color: const Color(0xFFE8F5E9),
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(12),
+        side: const BorderSide(color: Color(0xFF81C784), width: 1.5),
+      ),
+      elevation: 2,
+      child: Padding(
+        padding: const EdgeInsets.all(14),
+        child: Column(
+          children: [
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                const Text('Total Recaudado Efectivo:', style: TextStyle(fontSize: 12, color: Colors.black87)),
+                Text('Bs. ${_totalEfectivo.toStringAsFixed(2)}', style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13)),
+              ],
+            ),
+            const SizedBox(height: 4),
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                const Text('Total de Gastos:', style: TextStyle(fontSize: 12, color: Colors.redAccent)),
+                Text('- Bs. ${_totalGastos.toStringAsFixed(2)}', style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13, color: Colors.redAccent)),
+              ],
+            ),
+            const Divider(color: Color(0xFF81C784), height: 16),
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                const Text(
+                  'EFECTIVO A ENTREGAR:',
+                  style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13, color: Color(0xFF1B5E20)),
+                ),
+                Text(
+                  'Bs. ${_totalAEntregarEfectivo.toStringAsFixed(2)}',
+                  style: const TextStyle(
+                    fontWeight: FontWeight.w900,
+                    fontSize: 20,
+                    color: Color(0xFF1B5E20),
+                  ),
+                ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildBotonesAccion() {
+    return Column(
+      children: [
+        // Botón WhatsApp
+        SizedBox(
+          width: double.infinity,
+          height: 48,
+          child: ElevatedButton.icon(
+            style: ElevatedButton.styleFrom(
+              backgroundColor: const Color(0xFF25D366),
+              foregroundColor: Colors.white,
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+              elevation: 2,
+            ),
+            icon: const Icon(Icons.chat, size: 20),
+            label: const Text(
+              'ENVIAR REPORTE A WHATSAPP EMPRESA',
+              style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13),
+            ),
+            onPressed: _enviarWhatsApp,
+          ),
+        ),
+        const SizedBox(height: 8),
+
+        Row(
+          children: [
+            // Botón Copiar
+            Expanded(
+              child: SizedBox(
+                height: 44,
+                child: OutlinedButton.icon(
+                  style: OutlinedButton.styleFrom(
+                    foregroundColor: const Color(0xFF0D47A1),
+                    side: const BorderSide(color: Color(0xFF0D47A1)),
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                  ),
+                  icon: const Icon(Icons.copy, size: 18),
+                  label: const Text('Copiar Reporte', style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold)),
+                  onPressed: _copiarReporte,
+                ),
+              ),
+            ),
+            const SizedBox(width: 8),
+
+            // Botón Guardar en Sistema
+            Expanded(
+              child: SizedBox(
+                height: 44,
+                child: ElevatedButton.icon(
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: const Color(0xFF0D47A1),
+                    foregroundColor: Colors.white,
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                  ),
+                  icon: _guardando
+                      ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2))
+                      : const Icon(Icons.save, size: 18),
+                  label: const Text('Guardar Cierre', style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold)),
+                  onPressed: _guardando ? null : _guardarCierre,
+                ),
+              ),
+            ),
+          ],
+        ),
+      ],
     );
   }
 }

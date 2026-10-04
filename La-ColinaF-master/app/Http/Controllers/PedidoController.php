@@ -429,6 +429,11 @@ public function ver_pedidos_motoquero($id, Request $request)
         }
     }
 
+    $cierreExistente = \App\Models\CierreVenta::with('gastos')
+        ->where('fecha', $fecha)
+        ->where('motoquero_id', $id)
+        ->first();
+
     return view('admin.pedidos.ver_pedidos_motoquero', compact(
         'pedidos',
         'motoquero',
@@ -438,7 +443,8 @@ public function ver_pedidos_motoquero($id, Request $request)
         'productos',
         'fecha',
         'userFiltered',
-        'ultimasCompras' // <-- nueva variable pasada a la vista
+        'ultimasCompras',
+        'cierreExistente'
     ));
 }
 

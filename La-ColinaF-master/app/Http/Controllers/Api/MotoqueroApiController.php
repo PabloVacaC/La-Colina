@@ -3,6 +3,9 @@
 namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
+use App\Models\CierreVenta;
+use App\Models\CierreVentaGasto;
+use App\Models\Configuracion;
 use App\Models\Cliente;
 use App\Models\DetallePedido;
 use App\Models\Motoquero;
@@ -563,5 +566,240 @@ class MotoqueroApiController extends Controller
             }),
             'ultima_compra'                 => $ultimaCompra ?? [],
         ];
+    }
+
+    /**
+     * Obtener el cierre del día (si ya existe) y los totales calculados
+     */
+    public function getCierreDia($id, Request $request)
+    {
+        $fecha = $request->fecha ?? Carbon::today()->toDateString();
+        $inicio = Carbon::parse($fecha)->startOfDay();
+        $fin    = Carbon::parse($fecha)->endOfDay();
+
+        $motoquero = Motoquero::find($id);
+        if (!$motoquero) {
+            return response()->json(['success' => false, 'message' => 'Motoquero no encontrado.'], 404);
+        }
+
+        $pedidos = Pedido::with('detalles')
+            ->where('motoquero_id', $id)
+            ->where('estado', 'Entregado')
+            ->whereBetween('updated_at', [$inicio, $fin])
+            ->get();
+
+        $ingresoBruto = (float) $pedidos->sum('total_precio');
+        $ingresoEfectivo = (float) $pedidos->where('metodo_pago', 'Efectivo')->sum('total_precio');
+        $ingresoQR = (float) $pedidos->where('metodo_pago', 'QR')->sum('total_precio');
+
+        $vendidosRegular = 0;
+        $vendidosAlcalina = 0;
+        $vendidosEnteroRegular = 0;
+        $vendidosEnteroAlcalina = 0;
+        $vendidosDispensers = 0;
+
+        foreach ($pedidos as $p) {
+            foreach ($p->detalles as $det) {
+                $nom = strtolower(trim($det->producto));
+                if ($nom === 'agua regular') {
+                    $vendidosRegular += (int)$det->cantidad;
+                } elseif ($nom === 'agua alcalina') {
+                    $vendidosAlcalina += (int)$det->cantidad;
+                } elseif (str_contains($nom, 'regular') && (str_contains($nom, 'entero') || str_contains($nom, 'botell'))) {
+                    $vendidosEnteroRegular += (int)$det->cantidad;
+                } elseif (str_contains($nom, 'alcalina') && (str_contains($nom, 'entero') || str_contains($nom, 'botell'))) {
+                    $vendidosEnteroAlcalina += (int)$det->cantidad;
+                } elseif (str_contains($nom, 'dispensador') || str_contains($nom, 'bomba') || str_contains($nom, 'bombita')) {
+                    $vendidosDispensers += (int)$det->cantidad;
+                }
+            }
+        }
+
+        $cierreExistente = CierreVenta::with('gastos')
+            ->where('fecha', $fecha)
+            ->where('motoquero_id', $id)
+            ->first();
+
+        $configuracion = Configuracion::first();
+        $telefonoEmpresa = $configuracion->telefono ?? '59163524474';
+
+        return response()->json([
+            'success' => true,
+            'fecha' => $fecha,
+            'motoquero' => [
+                'id' => $motoquero->id,
+                'nombre' => $motoquero->nombres . ' ' . $motoquero->apellidos,
+            ],
+            'telefono_empresa' => $telefonoEmpresa,
+            'totales' => [
+                'pedidos_entregados' => $pedidos->count(),
+                'ingreso_bruto' => $ingresoBruto,
+                'ingreso_efectivo' => $ingresoEfectivo,
+                'ingreso_qr' => $ingresoQR,
+                'botellones_normales' => $vendidosRegular,
+                'alcalinas' => $vendidosAlcalina,
+                'enteros_normales' => $vendidosEnteroRegular,
+                'enteros_alcalinas' => $vendidosEnteroAlcalina,
+                'dispensers' => $vendidosDispensers,
+            ],
+            'cierre_existente' => $cierreExistente ? [
+                'id' => $cierreExistente->id,
+                'total_gastos' => (float)$cierreExistente->total_gastos_distribucion,
+                'efectivo_entregado' => (float)$cierreExistente->efectivo_entregado,
+                'gastos' => $cierreExistente->gastos->map(fn($g) => [
+                    'concepto' => $g->concepto,
+                    'monto' => (float)$g->monto,
+                ]),
+            ] : null,
+        ]);
+    }
+
+    /**
+     * Finalizar día con registro de gastos (Combustibles, Otros) y cálculo de efectivo a entregar
+     */
+    public function finalizarDia($id, Request $request)
+    {
+        $request->validate([
+            'fecha' => 'nullable|date',
+            'gastos' => 'nullable|array',
+            'gastos.*.concepto' => 'required_with:gastos|string',
+            'gastos.*.monto' => 'required_with:gastos|numeric|min:0',
+        ]);
+
+        $fecha = $request->fecha ?? Carbon::today()->toDateString();
+        $inicio = Carbon::parse($fecha)->startOfDay();
+        $fin    = Carbon::parse($fecha)->endOfDay();
+
+        $motoquero = Motoquero::find($id);
+        if (!$motoquero) {
+            return response()->json(['success' => false, 'message' => 'Motoquero no encontrado.'], 404);
+        }
+
+        $pedidos = Pedido::with('detalles')
+            ->where('motoquero_id', $id)
+            ->where('estado', 'Entregado')
+            ->whereBetween('updated_at', [$inicio, $fin])
+            ->get();
+
+        $ingresoBruto = (float) $pedidos->sum('total_precio');
+        $ingresoEfectivo = (float) $pedidos->where('metodo_pago', 'Efectivo')->sum('total_precio');
+        $ingresoQR = (float) $pedidos->where('metodo_pago', 'QR')->sum('total_precio');
+
+        $vendidosRegular = 0;
+        $vendidosAlcalina = 0;
+        $vendidosEnteroRegular = 0;
+        $vendidosEnteroAlcalina = 0;
+        $vendidosDispensers = 0;
+
+        foreach ($pedidos as $p) {
+            foreach ($p->detalles as $det) {
+                $nom = strtolower(trim($det->producto));
+                if ($nom === 'agua regular') {
+                    $vendidosRegular += (int)$det->cantidad;
+                } elseif ($nom === 'agua alcalina') {
+                    $vendidosAlcalina += (int)$det->cantidad;
+                } elseif (str_contains($nom, 'regular') && (str_contains($nom, 'entero') || str_contains($nom, 'botell'))) {
+                    $vendidosEnteroRegular += (int)$det->cantidad;
+                } elseif (str_contains($nom, 'alcalina') && (str_contains($nom, 'entero') || str_contains($nom, 'botell'))) {
+                    $vendidosEnteroAlcalina += (int)$det->cantidad;
+                } elseif (str_contains($nom, 'dispensador') || str_contains($nom, 'bomba') || str_contains($nom, 'bombita')) {
+                    $vendidosDispensers += (int)$det->cantidad;
+                }
+            }
+        }
+
+        $totalGastos = collect($request->gastos)->sum(fn($g) => (float)$g['monto']);
+        $efectivoEntregado = max(0, $ingresoEfectivo - $totalGastos);
+
+        $cierre = DB::transaction(function () use ($fecha, $id, $ingresoBruto, $ingresoEfectivo, $ingresoQR, $totalGastos, $efectivoEntregado, $request) {
+            $c = CierreVenta::updateOrCreate(
+                [
+                    'fecha' => $fecha,
+                    'motoquero_id' => $id,
+                ],
+                [
+                    'ingreso_bruto' => $ingresoBruto,
+                    'ingreso_efectivo' => $ingresoEfectivo,
+                    'ingreso_qr' => $ingresoQR,
+                    'total_gastos_distribucion' => $totalGastos,
+                    'efectivo_entregado' => $efectivoEntregado,
+                ]
+            );
+
+            $c->gastos()->delete();
+            foreach ($request->gastos ?? [] as $g) {
+                CierreVentaGasto::create([
+                    'cierre_venta_id' => $c->id,
+                    'concepto' => $g['concepto'],
+                    'monto' => $g['monto'],
+                ]);
+            }
+
+            return $c;
+        });
+
+        $configuracion = Configuracion::first();
+        $telefonoEmpresa = $configuracion->telefono ?? '59163524474';
+        $nombreEmpresa = $configuracion->nombre ?? 'La Colina';
+
+        // Generar texto para WhatsApp
+        $fechaFmt = Carbon::parse($fecha)->format('d/m/Y');
+        $gastosTexto = '';
+        if (!empty($request->gastos)) {
+            foreach ($request->gastos as $g) {
+                $gastosTexto .= "• " . $g['concepto'] . ": Bs. " . number_format($g['monto'], 2) . "\n";
+            }
+        } else {
+            $gastosTexto = "• Sin gastos registrados\n";
+        }
+
+        $reporteTexto = "📋 *CIERRE DE VENTAS DEL DÍA*\n"
+            . "📅 *Fecha:* {$fechaFmt}\n"
+            . "🛵 *Distribuidor:* {$motoquero->nombres} {$motoquero->apellidos}\n"
+            . "🏢 *Empresa:* {$nombreEmpresa}\n"
+            . "━━━━━━━━━━━━━━━━━━━━\n"
+            . "📦 *PRODUCTOS VENDIDOS:*\n"
+            . "• Botellones normales: {$vendidosRegular}\n"
+            . "• Alcalinas: {$vendidosAlcalina}\n"
+            . "• Enteros normales: {$vendidosEnteroRegular}\n"
+            . "• Enteros alcalinas: {$vendidosEnteroAlcalina}\n"
+            . "• Dispensers: {$vendidosDispensers}\n"
+            . "━━━━━━━━━━━━━━━━━━━━\n"
+            . "💰 *RESUMEN DE INGRESOS:*\n"
+            . "💵 Total Efectivo: Bs. " . number_format($ingresoEfectivo, 2) . "\n"
+            . "📱 Total en QR: Bs. " . number_format($ingresoQR, 2) . "\n"
+            . "💎 Total Ingresos: Bs. " . number_format($ingresoBruto, 2) . "\n"
+            . "━━━━━━━━━━━━━━━━━━━━\n"
+            . "⛽ *GASTOS REGISTRADOS:*\n"
+            . $gastosTexto
+            . "🔻 Total Gastos: Bs. " . number_format($totalGastos, 2) . "\n"
+            . "━━━━━━━━━━━━━━━━━━━━\n"
+            . "💵 *TOTAL A ENTREGAR EN EFECTIVO:*\n"
+            . "👉 *Bs. " . number_format($efectivoEntregado, 2) . "*\n"
+            . "━━━━━━━━━━━━━━━━━━━━";
+
+        return response()->json([
+            'success' => true,
+            'message' => 'Cierre del día finalizado correctamente.',
+            'data' => [
+                'cierre_id' => $cierre->id,
+                'fecha' => $fecha,
+                'ingreso_bruto' => $ingresoBruto,
+                'ingreso_efectivo' => $ingresoEfectivo,
+                'ingreso_qr' => $ingresoQR,
+                'total_gastos' => $totalGastos,
+                'efectivo_entregado' => $efectivoEntregado,
+                'productos' => [
+                    'botellones_normales' => $vendidosRegular,
+                    'alcalinas' => $vendidosAlcalina,
+                    'enteros_normales' => $vendidosEnteroRegular,
+                    'enteros_alcalinas' => $vendidosEnteroAlcalina,
+                    'dispensers' => $vendidosDispensers,
+                ],
+                'gastos' => $cierre->gastos()->get(['concepto', 'monto']),
+                'reporte_texto' => $reporteTexto,
+                'whatsapp_url' => 'https://wa.me/' . $telefonoEmpresa . '?text=' . urlencode($reporteTexto),
+            ]
+        ]);
     }
 }

@@ -43,3 +43,7 @@ Route::post('/motoquero/ubicacion', [MotoqueroApiController::class, 'guardarUbic
 Route::get('/motoqueros/ubicaciones', [MotoqueroApiController::class, 'getUbicacionesAdmin']);
 Route::get('/productos', [MotoqueroApiController::class, 'getProductos']);
 
+// Finalizar día y rendición de gastos / cierre
+Route::get('/motoquero/{id}/cierre-dia', [MotoqueroApiController::class, 'getCierreDia']);
+Route::post('/motoquero/{id}/finalizar-dia', [MotoqueroApiController::class, 'finalizarDia']);
+

@@ -283,6 +283,47 @@ class ApiService {
       return false;
     }
   }
+
+  /// Obtener cierre del día del motoquero
+  Future<Map<String, dynamic>?> getCierreDia(int motoqueroId, {String? fecha}) async {
+    try {
+      String query = fecha != null ? '?fecha=$fecha' : '';
+      final url = Uri.parse('$_baseUrl/motoquero/$motoqueroId/cierre-dia$query');
+      final response = await http.get(url, headers: _headers).timeout(const Duration(seconds: 10));
+      if (response.statusCode == 200) {
+        return jsonDecode(response.body);
+      }
+      return null;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// Finalizar día del motoquero guardando gastos en backend
+  Future<Map<String, dynamic>> finalizarDia({
+    required int motoqueroId,
+    required List<Map<String, dynamic>> gastos,
+    String? fecha,
+  }) async {
+    final url = Uri.parse('$_baseUrl/motoquero/$motoqueroId/finalizar-dia');
+    final response = await http
+        .post(
+          url,
+          headers: _headers,
+          body: jsonEncode({
+            if (fecha != null) 'fecha': fecha,
+            'gastos': gastos,
+          }),
+        )
+        .timeout(const Duration(seconds: 12));
+
+    final data = jsonDecode(response.body);
+    if (response.statusCode == 200 && data['success'] == true) {
+      return data;
+    } else {
+      throw Exception(data['message'] ?? 'Error al finalizar día');
+    }
+  }
 }
 
 class ProductoItem {

@@ -440,18 +440,14 @@
 
         
         <div style="display:flex; justify-content:center; margin-bottom:30px;">
-            
             <button 
                 type="button"
                 data-toggle="modal"
                 data-target="#reporteModal"
-                class="btn btn-success"
-                style="padding:10px 25px; font-weight:600;">
-                
-                Ver reporte del día
-                
+                class="btn btn-success shadow"
+                style="padding:12px 28px; font-weight:700; font-size:16px; border-radius:10px;">
+                <i class="fas fa-flag-checkered mr-2"></i> Finalizar Día / Reporte de Ventas
             </button>
-
         </div>
 
 
@@ -646,15 +642,17 @@
 
 <div class="modal-content">
 
-<div class="modal-header">
+<div class="modal-header bg-success text-white">
 
-<h5 class="modal-title">
-Reporte de ventas del día
+<h5 class="modal-title font-weight-bold">
+    <i class="fas fa-flag-checkered mr-2"></i> Finalizar Día / Reporte de Ventas y Liquidación
 </h5>
 
 <button type="button"
-        class="btn-close"
-        data-dismiss="modal">
+        class="close text-white"
+        data-dismiss="modal"
+        aria-label="Cerrar">
+    <span aria-hidden="true">&times;</span>
 </button>
 
 </div>
@@ -662,129 +660,529 @@ Reporte de ventas del día
 <div class="modal-body">
 
 @php
+$fechaCierre = $userFiltered ? $fecha : now()->toDateString();
+$pedidosCierre = $pedidos_entregados;
 
-$fecha = request('fecha') ?? now()->toDateString();
+$vendidosRegular = 0;
+$vendidosAlcalina = 0;
+$vendidosEnteroRegular = 0;
+$vendidosEnteroAlcalina = 0;
+$vendidosDispensers = 0;
 
-$pedidos = \App\Models\Pedido::with('cliente')
-    ->where('motoquero_id', auth()->user()->motoquero->id)
-    ->where('estado','Entregado')
-    ->whereDate('updated_at',$fecha)
-    ->orderBy('updated_at','asc')
-    ->get();
+foreach ($pedidosCierre as $p) {
+    foreach ($p->detalles as $det) {
+        $nom = strtolower(trim($det->producto));
+        if ($nom === 'agua regular') {
+            $vendidosRegular += (int)$det->cantidad;
+        } elseif ($nom === 'agua alcalina') {
+            $vendidosAlcalina += (int)$det->cantidad;
+        } elseif (str_contains($nom, 'regular') && (str_contains($nom, 'entero') || str_contains($nom, 'botell'))) {
+            $vendidosEnteroRegular += (int)$det->cantidad;
+        } elseif (str_contains($nom, 'alcalina') && (str_contains($nom, 'entero') || str_contains($nom, 'botell'))) {
+            $vendidosEnteroAlcalina += (int)$det->cantidad;
+        } elseif (str_contains($nom, 'dispensador') || str_contains($nom, 'bomba') || str_contains($nom, 'bombita')) {
+            $vendidosDispensers += (int)$det->cantidad;
+        }
+    }
+}
 
-$ingresoEfectivo = $pedidos
-    ->where('metodo_pago','Efectivo')
-    ->sum('total_precio');
-
-$ingresoQR = $pedidos
-    ->where('metodo_pago','QR')
-    ->sum('total_precio');
-
-$ingresoTotal = $pedidos->sum('total_precio');
-
+$ingresoEfectivo = $pedidosCierre->where('metodo_pago','Efectivo')->sum('total_precio');
+$ingresoQR = $pedidosCierre->where('metodo_pago','QR')->sum('total_precio');
+$ingresoTotal = $pedidosCierre->sum('total_precio');
+$telefonoEmpresa = $configuracion->telefono ?? '59163524474';
+$nombreEmpresa = $configuracion->nombre ?? 'La Colina';
 @endphp
 
-{{-- RESUMEN --}}
-<div class="row mb-4 text-end">
-
-<div class="col-md-4">
-<strong>Total efectivo</strong><br>
-{{ number_format($ingresoEfectivo,2) }} Bs
+{{-- ==============================================
+    📦 1. RESUMEN DE PRODUCTOS VENDIDOS
+============================================== --}}
+<div class="card bg-light border-primary mb-3">
+    <div class="card-header bg-primary text-white d-flex justify-content-between align-items-center py-2">
+        <h6 class="mb-0 font-weight-bold"><i class="fas fa-boxes mr-1"></i> Total Vendido por Producto</h6>
+        <span class="badge badge-light text-dark font-weight-bold">{{ $pedidosCierre->count() }} entregas</span>
+    </div>
+    <div class="card-body py-2">
+        <div class="row text-center">
+            <div class="col-md col-6 border-right py-2">
+                <span class="text-muted d-block small font-weight-bold">BOTELLONES NORMALES</span>
+                <span class="h4 font-weight-bold text-primary">{{ $vendidosRegular }}</span>
+                <small class="d-block text-muted">Agua Regular</small>
+            </div>
+            <div class="col-md col-6 border-right py-2">
+                <span class="text-muted d-block small font-weight-bold">ALCALINAS</span>
+                <span class="h4 font-weight-bold text-info">{{ $vendidosAlcalina }}</span>
+                <small class="d-block text-muted">Agua Alcalina</small>
+            </div>
+            <div class="col-md col-6 border-right py-2">
+                <span class="text-muted d-block small font-weight-bold">ENTEROS NORMALES</span>
+                <span class="h4 font-weight-bold text-success">{{ $vendidosEnteroRegular }}</span>
+                <small class="d-block text-muted">Botellón + Regular</small>
+            </div>
+            <div class="col-md col-6 border-right py-2">
+                <span class="text-muted d-block small font-weight-bold">ENTEROS ALCALINAS</span>
+                <span class="h4 font-weight-bold text-warning">{{ $vendidosEnteroAlcalina }}</span>
+                <small class="d-block text-muted">Botellón + Alcalina</small>
+            </div>
+            <div class="col-md col-6 border-right py-2">
+                <span class="text-muted d-block small font-weight-bold">DISPENSERS</span>
+                <span class="h4 font-weight-bold" style="color: #6f42c1;">{{ $vendidosDispensers }}</span>
+                <small class="d-block text-muted">Mesa / Bombitas</small>
+            </div>
+            <div class="col-md col-6 py-2">
+                <span class="text-muted d-block small font-weight-bold">TOTAL BOTELLONES</span>
+                <span class="h4 font-weight-bold text-dark">{{ $vendidosRegular + $vendidosAlcalina + $vendidosEnteroRegular + $vendidosEnteroAlcalina }}</span>
+                <small class="d-block text-muted">Unidades</small>
+            </div>
+        </div>
+    </div>
 </div>
 
-<div class="col-md-4">
-<strong>Total QR</strong><br>
-{{ number_format($ingresoQR,2) }} Bs
+{{-- ==============================================
+    💰 2. RESUMEN DE INGRESOS
+============================================== --}}
+<div class="row mb-3">
+    <div class="col-md-4 mb-2">
+        <div class="card border-success h-100 shadow-sm">
+            <div class="card-body p-3 text-center">
+                <span class="text-muted d-block small font-weight-bold">TOTAL EFECTIVO RECAUDADO</span>
+                <span class="h3 font-weight-bold text-success">Bs. {{ number_format($ingresoEfectivo, 2) }}</span>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-4 mb-2">
+        <div class="card border-primary h-100 shadow-sm">
+            <div class="card-body p-3 text-center">
+                <span class="text-muted d-block small font-weight-bold">TOTAL EN QR / TRANSFERENCIA</span>
+                <span class="h3 font-weight-bold text-primary">Bs. {{ number_format($ingresoQR, 2) }}</span>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-4 mb-2">
+        <div class="card border-dark h-100 shadow-sm">
+            <div class="card-body p-3 text-center">
+                <span class="text-muted d-block small font-weight-bold">TOTAL INGRESO BRUTO</span>
+                <span class="h3 font-weight-bold text-dark">Bs. {{ number_format($ingresoTotal, 2) }}</span>
+            </div>
+        </div>
+    </div>
 </div>
 
-<div class="col-md-4">
-<strong>Ingreso total</strong><br>
-{{ number_format($ingresoTotal,2) }} Bs
+{{-- ==============================================
+    ⛽ 3. FORMULARIO DE GASTOS Y RENDICIÓN
+============================================== --}}
+<form method="POST" action="{{ route('admin.contabilidad.confirmar_venta.store') }}" id="form-cierre-modal">
+    @csrf
+    <input type="hidden" name="fecha" value="{{ $fechaCierre }}">
+    <input type="hidden" name="distribuidor_id" value="{{ $motoquero->id }}">
+    <input type="hidden" name="ingreso_bruto" value="{{ $ingresoTotal }}">
+    <input type="hidden" name="ingreso_efectivo" value="{{ $ingresoEfectivo }}">
+    <input type="hidden" name="ingreso_qr" value="{{ $ingresoQR }}">
+
+    <div class="card border-warning mb-3">
+        <div class="card-header bg-warning text-dark d-flex justify-content-between align-items-center py-2">
+            <h6 class="mb-0 font-weight-bold"><i class="fas fa-receipt text-danger mr-1"></i> Gastos del Día (Combustible, Otros)</h6>
+            <div>
+                <button type="button" class="btn btn-sm btn-dark font-weight-bold" id="modal-agregar-combustible">
+                    <i class="fas fa-gas-pump text-warning"></i> + Agregar Combustible
+                </button>
+                <button type="button" class="btn btn-sm btn-secondary font-weight-bold ml-2" id="modal-agregar-otro">
+                    <i class="fas fa-plus-circle text-info"></i> + Agregar Otro Gasto
+                </button>
+            </div>
+        </div>
+        <div class="card-body p-3">
+            <table class="table table-bordered table-sm mb-2" id="modal-tabla-gastos">
+                <thead class="table-light">
+                    <tr>
+                        <th>Concepto / Detalle del Gasto</th>
+                        <th width="200">Monto (Bs.)</th>
+                        <th width="50" class="text-center">✕</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    @if(isset($cierreExistente) && $cierreExistente && $cierreExistente->gastos && $cierreExistente->gastos->count() > 0)
+                        @foreach($cierreExistente->gastos as $idx => $g)
+                            <tr>
+                                <td>
+                                    <input type="text"
+                                           name="gastos[{{ $idx }}][concepto]"
+                                           class="form-control form-control-sm modal-concepto-gasto"
+                                           value="{{ $g->concepto }}"
+                                           placeholder="Ej: Combustible, Pinchazo..." required>
+                                </td>
+                                <td>
+                                    <div class="input-group input-group-sm">
+                                        <div class="input-group-prepend"><span class="input-group-text">Bs.</span></div>
+                                        <input type="number"
+                                               step="0.01"
+                                               name="gastos[{{ $idx }}][monto]"
+                                               class="form-control form-control-sm modal-monto-gasto"
+                                               value="{{ $g->monto }}" required>
+                                    </div>
+                                </td>
+                                <td class="text-center">
+                                    <button type="button" class="btn btn-xs btn-danger modal-eliminar-fila">✕</button>
+                                </td>
+                            </tr>
+                        @endforeach
+                    @else
+                        <tr>
+                            <td>
+                                <input type="text"
+                                       name="gastos[0][concepto]"
+                                       class="form-control form-control-sm modal-concepto-gasto"
+                                       value="Combustible"
+                                       placeholder="Ej: Combustible" required>
+                            </td>
+                            <td>
+                                <div class="input-group input-group-sm">
+                                    <div class="input-group-prepend"><span class="input-group-text">Bs.</span></div>
+                                    <input type="number"
+                                           step="0.01"
+                                           name="gastos[0][monto]"
+                                           class="form-control form-control-sm modal-monto-gasto"
+                                           value="0" required>
+                                </div>
+                            </td>
+                            <td class="text-center">
+                                <button type="button" class="btn btn-xs btn-danger modal-eliminar-fila">✕</button>
+                            </td>
+                        </tr>
+                    @endif
+                </tbody>
+            </table>
+
+            {{-- TOTALES LIQUIDACIÓN --}}
+            <div class="row align-items-center bg-light border rounded p-2 mx-0 mt-3">
+                <div class="col-md-6">
+                    <p class="mb-1 text-danger font-weight-bold">
+                        Total Gastos: - Bs. <span id="modal-total-gastos">0.00</span>
+                    </p>
+                    <small class="text-muted">Se deducen únicamente del monto en efectivo recaudado.</small>
+                </div>
+                <div class="col-md-6 text-right">
+                    <span class="text-muted d-block small font-weight-bold">TOTAL A ENTREGAR EN EFECTIVO:</span>
+                    <span class="h4 font-weight-bold text-success mb-0">Bs. <span id="modal-efectivo-entregar">{{ number_format($ingresoEfectivo, 2) }}</span></span>
+                </div>
+            </div>
+        </div>
+
+        <div class="card-footer d-flex justify-content-between align-items-center flex-wrap gap-2 py-2">
+            <div>
+                <button type="button" class="btn btn-info btn-sm font-weight-bold mr-2" onclick="imprimirReporteModal()">
+                    <i class="fas fa-print"></i> Descargar / Imprimir Reporte
+                </button>
+                <a href="#" id="modal-btn-whatsapp-empresa" target="_blank" class="btn btn-success btn-sm font-weight-bold">
+                    <i class="fab fa-whatsapp"></i> Enviar a WhatsApp Empresa
+                </a>
+            </div>
+            <div>
+                <button type="submit" class="btn btn-primary btn-sm font-weight-bold">
+                    <i class="fas fa-save mr-1"></i> Guardar Cierre de Día
+                </button>
+            </div>
+        </div>
+    </div>
+</form>
+
+{{-- ==============================================
+    📋 4. DETALLE DE PEDIDOS ENTREGADOS
+============================================== --}}
+<details class="mt-3">
+    <summary class="font-weight-bold text-primary" style="cursor: pointer;">
+        Ver listado individual de pedidos entregados ({{ $pedidosCierre->count() }})
+    </summary>
+    <div class="table-responsive mt-2">
+        <table class="table table-bordered table-sm">
+            <thead class="table-light">
+                <tr>
+                    <th>#</th>
+                    <th>Cliente</th>
+                    <th>Total</th>
+                    <th>Método</th>
+                    <th>Hora</th>
+                </tr>
+            </thead>
+            <tbody>
+                @forelse($pedidosCierre as $pedido)
+                    <tr>
+                        <td>#{{ $pedido->orden > 0 ? $pedido->orden : $loop->iteration }}</td>
+                        <td>{{ $pedido->cliente->nombre ?? 'Sin cliente' }}</td>
+                        <td>Bs. {{ number_format($pedido->total_precio,2) }}</td>
+                        <td>
+                            @if($pedido->metodo_pago == 'QR')
+                                <span class="badge badge-success">QR</span>
+                            @else
+                                <span class="badge badge-primary">Efectivo</span>
+                            @endif
+                        </td>
+                        <td>{{ $pedido->updated_at->format('H:i') }}</td>
+                    </tr>
+                @empty
+                    <tr>
+                        <td colspan="5" class="text-center text-muted">No hay pedidos entregados en esta fecha</td>
+                    </tr>
+                @endforelse
+            </tbody>
+        </table>
+    </div>
+</details>
+
+{{-- ÁREA OCULTA PARA IMPRESIÓN DEL MODAL --}}
+<div id="modal-area-impresion" class="d-none">
+    <div style="font-family: Arial, sans-serif; padding: 20px; max-width: 750px; margin: 0 auto; color: #333;">
+        <div style="text-align: center; border-bottom: 2px solid #0056b3; padding-bottom: 12px; margin-bottom: 15px;">
+            <h2 style="margin: 0; color: #0056b3;">{{ $nombreEmpresa }}</h2>
+            <p style="margin: 3px 0; font-size: 14px; color: #666;">Reporte de Liquidación de Entrega y Cierre Diario</p>
+            <p style="margin: 2px 0; font-size: 13px;">Fecha: <b>{{ \Carbon\Carbon::parse($fechaCierre)->format('d/m/Y') }}</b> | Teléfono: {{ $telefonoEmpresa }}</p>
+        </div>
+
+        <div style="background: #f8f9fa; border: 1px solid #ddd; padding: 10px; border-radius: 6px; margin-bottom: 15px;">
+            <p style="margin: 3px 0;"><b>Distribuidor:</b> {{ $motoquero->nombres }} {{ $motoquero->apellidos }}</p>
+            <p style="margin: 3px 0;"><b>Placa / Vehículo:</b> {{ $motoquero->placa ?? 'N/A' }} | <b>Total Entregas Realizadas:</b> {{ $pedidosCierre->count() }}</p>
+        </div>
+
+        <h4 style="border-bottom: 1px solid #ddd; padding-bottom: 4px; color: #0056b3;">1. Productos Vendidos</h4>
+        <table style="width: 100%; border-collapse: collapse; margin-bottom: 15px; font-size: 14px;">
+            <thead>
+                <tr style="background: #e9ecef;">
+                    <th style="border: 1px solid #ccc; padding: 6px; text-align: left;">Producto / Categoría</th>
+                    <th style="border: 1px solid #ccc; padding: 6px; text-align: center;">Cantidad</th>
+                </tr>
+            </thead>
+            <tbody>
+                <tr><td style="border: 1px solid #ccc; padding: 6px;">Botellones Normales (Agua Regular)</td><td style="border: 1px solid #ccc; padding: 6px; text-align: center;"><b>{{ $vendidosRegular }}</b></td></tr>
+                <tr><td style="border: 1px solid #ccc; padding: 6px;">Alcalinas (Agua Alcalina)</td><td style="border: 1px solid #ccc; padding: 6px; text-align: center;"><b>{{ $vendidosAlcalina }}</b></td></tr>
+                <tr><td style="border: 1px solid #ccc; padding: 6px;">Enteros Normales (Botellón + Regular)</td><td style="border: 1px solid #ccc; padding: 6px; text-align: center;"><b>{{ $vendidosEnteroRegular }}</b></td></tr>
+                <tr><td style="border: 1px solid #ccc; padding: 6px;">Enteros Alcalinas (Botellón + Alcalina)</td><td style="border: 1px solid #ccc; padding: 6px; text-align: center;"><b>{{ $vendidosEnteroAlcalina }}</b></td></tr>
+                <tr><td style="border: 1px solid #ccc; padding: 6px;">Dispensers (Mesa / Bombitas)</td><td style="border: 1px solid #ccc; padding: 6px; text-align: center;"><b>{{ $vendidosDispensers }}</b></td></tr>
+                <tr style="background: #f1f3f5; font-weight: bold;">
+                    <td style="border: 1px solid #ccc; padding: 6px;">TOTAL PRODUCTOS</td>
+                    <td style="border: 1px solid #ccc; padding: 6px; text-align: center;">{{ $vendidosRegular + $vendidosAlcalina + $vendidosEnteroRegular + $vendidosEnteroAlcalina + $vendidosDispensers }}</td>
+                </tr>
+            </tbody>
+        </table>
+
+        <h4 style="border-bottom: 1px solid #ddd; padding-bottom: 4px; color: #0056b3;">2. Gastos de Distribución</h4>
+        <div id="modal-print-gastos-lista" style="margin-bottom: 15px;"></div>
+
+        <h4 style="border-bottom: 1px solid #ddd; padding-bottom: 4px; color: #0056b3;">3. Resumen Financiero</h4>
+        <table style="width: 100%; border-collapse: collapse; margin-bottom: 25px; font-size: 14px;">
+            <tr><td style="border: 1px solid #ccc; padding: 6px;">Total Efectivo Recaudado:</td><td style="border: 1px solid #ccc; padding: 6px; text-align: right;"><b>Bs. {{ number_format($ingresoEfectivo, 2) }}</b></td></tr>
+            <tr><td style="border: 1px solid #ccc; padding: 6px;">Total en QR / Transferencia:</td><td style="border: 1px solid #ccc; padding: 6px; text-align: right;"><b>Bs. {{ number_format($ingresoQR, 2) }}</b></td></tr>
+            <tr><td style="border: 1px solid #ccc; padding: 6px;">Ingreso Bruto Total:</td><td style="border: 1px solid #ccc; padding: 6px; text-align: right;"><b>Bs. {{ number_format($ingresoTotal, 2) }}</b></td></tr>
+            <tr><td style="border: 1px solid #ccc; padding: 6px; color: #c00;">Total Gastos Deducidos:</td><td style="border: 1px solid #ccc; padding: 6px; text-align: right; color: #c00;"><b>- Bs. <span id="modal-print-total-gastos">0.00</span></b></td></tr>
+            <tr style="background: #d4edda; font-size: 16px; font-weight: bold; color: #155724;">
+                <td style="border: 1px solid #28a745; padding: 8px;">TOTAL A ENTREGAR EN EFECTIVO:</td>
+                <td style="border: 1px solid #28a745; padding: 8px; text-align: right;">Bs. <span id="modal-print-efectivo-entregar">0.00</span></td>
+            </tr>
+        </table>
+
+        <div style="display: flex; justify-content: space-between; margin-top: 50px; text-align: center;">
+            <div style="width: 40%; border-top: 1px solid #333; padding-top: 6px;">
+                <p style="margin: 0; font-size: 13px;">Firma Distribuidor</p>
+            </div>
+            <div style="width: 40%; border-top: 1px solid #333; padding-top: 6px;">
+                <p style="margin: 0; font-size: 13px;">Firma Recepción Administración</p>
+            </div>
+        </div>
+    </div>
 </div>
 
 </div>
 
-
-{{-- TABLA --}}
-<table class="table table-bordered table-sm">
-
-<thead class="table-light">
-
-<tr>
-
-<th>#</th>
-<th>Cliente</th>
-<th>Total</th>
-<th>Método</th>
-<th>Hora</th>
-
-</tr>
-
-</thead>
-
-<tbody>
-
-@forelse($pedidos as $pedido)
-
-<tr>
-
-<td>#{{ $pedido->orden > 0 ? $pedido->orden : $loop->iteration }}</td>
-
-<td>
-{{ $pedido->cliente->nombre ?? 'Sin cliente' }}
-</td>
-
-<td>
-{{ number_format($pedido->total_precio,2) }}
-</td>
-
-<td>
-
-@if($pedido->metodo_pago == 'QR')
-
-<span class="badge badge-success">
-QR
-</span>
-
-@else
-
-<span class="badge badge-primary">
-Efectivo
-</span>
-
-@endif
-
-</td>
-
-<td>
-{{ $pedido->updated_at->format('H:i') }}
-</td>
-
-</tr>
-
-@empty
-
-<tr>
-
-<td colspan="5" class="text-center text-muted">
-No hay pedidos entregados hoy
-</td>
-
-</tr>
-
-@endforelse
-
-</tbody>
-
-</table>
-
 </div>
 
 </div>
 
 </div>
 
-</div>
+{{-- SCRIPT PARA EL MODAL DE FINALIZAR DÍA --}}
+<script>
+let modalIndexGasto = {{ (isset($cierreExistente) && $cierreExistente && $cierreExistente->gastos) ? $cierreExistente->gastos->count() : 1 }};
+
+const modalIngresoEfectivo = {{ $ingresoEfectivo ?? 0 }};
+const modalIngresoQR       = {{ $ingresoQR ?? 0 }};
+const modalIngresoTotal    = {{ $ingresoTotal ?? 0 }};
+
+const modalVendidosRegular        = {{ $vendidosRegular ?? 0 }};
+const modalVendidosAlcalina       = {{ $vendidosAlcalina ?? 0 }};
+const modalVendidosEnteroRegular  = {{ $vendidosEnteroRegular ?? 0 }};
+const modalVendidosEnteroAlcalina = {{ $vendidosEnteroAlcalina ?? 0 }};
+const modalVendidosDispensers     = {{ $vendidosDispensers ?? 0 }};
+
+const modalFechaFmt       = "{{ \Carbon\Carbon::parse($fechaCierre)->format('d/m/Y') }}";
+const modalMotoqueroNom   = "{{ $motoquero->nombres }} {{ $motoquero->apellidos }}";
+const modalTelefonoEmpresa = "{{ $telefonoEmpresa }}";
+const modalNombreEmpresa  = "{{ $nombreEmpresa }}";
+
+// Botón Agregar Combustible
+document.getElementById('modal-agregar-combustible')?.addEventListener('click', () => {
+    modalAgregarFilaGasto('Combustible');
+});
+
+// Botón Agregar Otro Gasto
+document.getElementById('modal-agregar-otro')?.addEventListener('click', () => {
+    modalAgregarFilaGasto('');
+});
+
+function modalAgregarFilaGasto(conceptoDefecto = '') {
+    const tbody = document.querySelector('#modal-tabla-gastos tbody');
+    if (!tbody) return;
+
+    const tr = document.createElement('tr');
+    tr.innerHTML = `
+        <td>
+            <input type="text"
+                   name="gastos[${modalIndexGasto}][concepto]"
+                   class="form-control form-control-sm modal-concepto-gasto"
+                   value="${conceptoDefecto}"
+                   placeholder="Ej: Combustible, Pinchazo, Peaje..." required>
+        </td>
+        <td>
+            <div class="input-group input-group-sm">
+                <div class="input-group-prepend"><span class="input-group-text">Bs.</span></div>
+                <input type="number"
+                       step="0.01"
+                       name="gastos[${modalIndexGasto}][monto]"
+                       class="form-control form-control-sm modal-monto-gasto"
+                       value="0" required>
+            </div>
+        </td>
+        <td class="text-center">
+            <button type="button" class="btn btn-xs btn-danger modal-eliminar-fila">✕</button>
+        </td>
+    `;
+    tbody.appendChild(tr);
+    modalIndexGasto++;
+    recalcularModalTotales();
+}
+
+// Eliminar fila
+document.addEventListener('click', e => {
+    if (e.target.classList.contains('modal-eliminar-fila')) {
+        e.target.closest('tr').remove();
+        recalcularModalTotales();
+    }
+});
+
+// Cambios en inputs de gastos
+document.addEventListener('input', e => {
+    if (e.target.classList.contains('modal-monto-gasto') || e.target.classList.contains('modal-concepto-gasto')) {
+        recalcularModalTotales();
+    }
+});
+
+function recalcularModalTotales() {
+    let totGastos = 0;
+    let items = [];
+
+    document.querySelectorAll('#modal-tabla-gastos tbody tr').forEach(row => {
+        const conc = row.querySelector('.modal-concepto-gasto')?.value.trim() || 'Gasto';
+        const mont = parseFloat(row.querySelector('.modal-monto-gasto')?.value || 0);
+        if (mont > 0) {
+            totGastos += mont;
+            items.push(`• ${conc}: Bs. ${mont.toFixed(2)}`);
+        }
+    });
+
+    const efectivoAEntregar = Math.max(0, modalIngresoEfectivo - totGastos);
+
+    const elTotGastos = document.getElementById('modal-total-gastos');
+    if (elTotGastos) elTotGastos.innerText = totGastos.toFixed(2);
+
+    const elEfecEntregar = document.getElementById('modal-efectivo-entregar');
+    if (elEfecEntregar) elEfecEntregar.innerText = efectivoAEntregar.toFixed(2);
+
+    // Para impresión
+    const printTotG = document.getElementById('modal-print-total-gastos');
+    if (printTotG) printTotG.innerText = totGastos.toFixed(2);
+
+    const printEfecE = document.getElementById('modal-print-efectivo-entregar');
+    if (printEfecE) printEfecE.innerText = efectivoAEntregar.toFixed(2);
+
+    const printGList = document.getElementById('modal-print-gastos-lista');
+    if (printGList) {
+        if (items.length > 0) {
+            let h = '<table style="width: 100%; border-collapse: collapse; font-size: 13px;">';
+            document.querySelectorAll('#modal-tabla-gastos tbody tr').forEach(row => {
+                const conc = row.querySelector('.modal-concepto-gasto')?.value.trim() || 'Gasto';
+                const mont = parseFloat(row.querySelector('.modal-monto-gasto')?.value || 0);
+                if (mont > 0) {
+                    h += `<tr><td style="border: 1px solid #ccc; padding: 4px 6px;">${conc}</td><td style="border: 1px solid #ccc; padding: 4px 6px; text-align: right;">Bs. ${mont.toFixed(2)}</td></tr>`;
+                }
+            });
+            h += '</table>';
+            printGList.innerHTML = h;
+        } else {
+            printGList.innerHTML = '<p style="color: #888; font-style: italic;">Sin gastos registrados</p>';
+        }
+    }
+
+    // Actualizar WhatsApp URL
+    actualizarModalWhatsApp(totGastos, efectivoAEntregar, items);
+}
+
+function actualizarModalWhatsApp(totGastos, efectivoAEntregar, items) {
+    const btn = document.getElementById('modal-btn-whatsapp-empresa');
+    if (!btn) return;
+
+    const textoGastos = items.length > 0 ? items.join('\n') : '• Sin gastos registrados';
+
+    const msg = `📋 *CIERRE DE VENTAS DEL DÍA*\n` +
+        `📅 *Fecha:* ${modalFechaFmt}\n` +
+        `🛵 *Distribuidor:* ${modalMotoqueroNom}\n` +
+        `🏢 *Empresa:* ${modalNombreEmpresa}\n` +
+        `━━━━━━━━━━━━━━━━━━━━\n` +
+        `📦 *PRODUCTOS VENDIDOS:*\n` +
+        `• Botellones normales: ${modalVendidosRegular}\n` +
+        `• Alcalinas: ${modalVendidosAlcalina}\n` +
+        `• Enteros normales: ${modalVendidosEnteroRegular}\n` +
+        `• Enteros alcalinas: ${modalVendidosEnteroAlcalina}\n` +
+        `• Dispensers: ${modalVendidosDispensers}\n` +
+        `━━━━━━━━━━━━━━━━━━━━\n` +
+        `💰 *RESUMEN DE INGRESOS:*\n` +
+        `💵 Total Efectivo: Bs. ${modalIngresoEfectivo.toFixed(2)}\n` +
+        `📱 Total en QR: Bs. ${modalIngresoQR.toFixed(2)}\n` +
+        `💎 Total Ingresos: Bs. ${modalIngresoTotal.toFixed(2)}\n` +
+        `━━━━━━━━━━━━━━━━━━━━\n` +
+        `⛽ *GASTOS REGISTRADOS:*\n` +
+        `${textoGastos}\n` +
+        `🔻 Total Gastos: Bs. ${totGastos.toFixed(2)}\n` +
+        `━━━━━━━━━━━━━━━━━━━━\n` +
+        `💵 *TOTAL A ENTREGAR EN EFECTIVO:*\n` +
+        `👉 *Bs. ${efectivoAEntregar.toFixed(2)}*\n` +
+        `━━━━━━━━━━━━━━━━━━━━`;
+
+    btn.href = `https://wa.me/${modalTelefonoEmpresa}?text=${encodeURIComponent(msg)}`;
+}
+
+// Inicializar cuando se abra el modal
+$('#reporteModal').on('shown.bs.modal', function () {
+    recalcularModalTotales();
+});
+
+document.addEventListener('DOMContentLoaded', () => {
+    recalcularModalTotales();
+});
+
+function imprimirReporteModal() {
+    recalcularModalTotales();
+    const contenido = document.getElementById('modal-area-impresion').innerHTML;
+    const ventana = window.open('', '', 'width=900,height=700');
+    ventana.document.write('<html><head><title>Reporte Cierre del Día</title>');
+    ventana.document.write('<style>@media print { body { -webkit-print-color-adjust: exact; } }</style>');
+    ventana.document.write('</head><body>');
+    ventana.document.write(contenido);
+    ventana.document.write('</body></html>');
+    ventana.document.close();
+    ventana.focus();
+    setTimeout(() => {
+        ventana.print();
+        ventana.close();
+    }, 400);
+}
+</script>
 
 
 @stop

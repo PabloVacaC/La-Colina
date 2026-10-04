@@ -71,16 +71,24 @@ class ConfirmacionVentaController extends Controller
 
         $vendidosRegular = 0;
         $vendidosAlcalina = 0;
+        $vendidosEnteroRegular = 0;
+        $vendidosEnteroAlcalina = 0;
+        $vendidosDispensers = 0;
 
         foreach ($pedidos as $pedido) {
             foreach ($pedido->detalles as $detalle) {
+                $nom = strtolower(trim($detalle->producto));
 
-                if ($detalle->producto === 'Agua Regular') {
-                    $vendidosRegular += $detalle->cantidad;
-                }
-
-                if ($detalle->producto === 'Agua Alcalina') {
-                    $vendidosAlcalina += $detalle->cantidad;
+                if ($nom === 'agua regular') {
+                    $vendidosRegular += (int)$detalle->cantidad;
+                } elseif ($nom === 'agua alcalina') {
+                    $vendidosAlcalina += (int)$detalle->cantidad;
+                } elseif (str_contains($nom, 'regular') && (str_contains($nom, 'entero') || str_contains($nom, 'botell'))) {
+                    $vendidosEnteroRegular += (int)$detalle->cantidad;
+                } elseif (str_contains($nom, 'alcalina') && (str_contains($nom, 'entero') || str_contains($nom, 'botell'))) {
+                    $vendidosEnteroAlcalina += (int)$detalle->cantidad;
+                } elseif (str_contains($nom, 'dispensador') || str_contains($nom, 'bomba') || str_contains($nom, 'bombita')) {
+                    $vendidosDispensers += (int)$detalle->cantidad;
                 }
             }
         }
@@ -93,12 +101,16 @@ class ConfirmacionVentaController extends Controller
         $restanteAlcalina = $alcalinaDespachado - $vendidosAlcalina;
 
         // ===============================
-        // 🔒 CIERRE EXISTENTE
+        // 🔒 CIERRE EXISTENTE CON GASTOS
         // ===============================
 
-        $cierreExistente = CierreVenta::where('fecha', $fecha)
+        $cierreExistente = CierreVenta::with('gastos')
+            ->where('fecha', $fecha)
             ->where('motoquero_id', $distribuidorId)
             ->first();
+
+        $configuracion = \App\Models\Configuracion::first();
+        $telefonoEmpresa = $configuracion->telefono ?? '59163524474';
 
         return view('admin.contabilidad.confirmar_venta', compact(
             'distribuidores',
@@ -113,8 +125,13 @@ class ConfirmacionVentaController extends Controller
             'alcalinaDespachado',
             'vendidosRegular',
             'vendidosAlcalina',
+            'vendidosEnteroRegular',
+            'vendidosEnteroAlcalina',
+            'vendidosDispensers',
             'restanteRegular',
-            'restanteAlcalina'
+            'restanteAlcalina',
+            'configuracion',
+            'telefonoEmpresa'
         ));
     }
 
