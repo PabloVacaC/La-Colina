@@ -85,10 +85,15 @@
                     <div class="row align-items-end">
 
                         {{-- BUSCADOR CLIENTE --}}
-                        <div class="col-md-4">
+                        <div class="col-md-4 position-relative">
                             <label>Cliente</label>
-                            <input type="text" id="buscadorCliente" class="form-control" placeholder="Buscar cliente...">
-                            <div id="resultadosClientes" class="list-group mt-1"></div>
+                            <div class="input-group">
+                                <input type="text" id="buscadorCliente" class="form-control" placeholder="Buscar por código, nombre o celular..." autocomplete="off">
+                                <div class="input-group-append" id="btnLimpiarCliente" style="display:none; cursor:pointer;" title="Limpiar búsqueda">
+                                    <span class="input-group-text bg-white"><i class="fas fa-times text-muted"></i></span>
+                                </div>
+                            </div>
+                            <div id="resultadosClientes" class="list-group shadow-lg" style="position: absolute; top: 100%; left: 15px; right: 15px; z-index: 1060; max-height: 360px; overflow-y: auto; display: none;"></div>
                         </div>
 
                         {{-- MOTOQUERO --}}
@@ -1365,60 +1370,134 @@ function mostrarClienteEnMapa(cliente, tipo = 'temporal') {
 document.addEventListener('DOMContentLoaded', function () {
 
     const buscador = document.getElementById('buscadorCliente');
-    if (!buscador) {
-        console.warn('buscadorCliente no existe en el DOM');
+    const btnLimpiar = document.getElementById('btnLimpiarCliente');
+    const contenedor = document.getElementById('resultadosClientes');
+
+    if (!buscador || !contenedor) {
+        console.warn('buscadorCliente o resultadosClientes no existe en el DOM');
         return;
     }
 
-    buscador.addEventListener('keyup', function () {
+    function escapeRegex(string) {
+        return string.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    }
 
-        const q = this.value.toLowerCase().trim();
-        const contenedor = document.getElementById('resultadosClientes');
+    // Calcula puntaje de relevancia para ordenar los resultados
+    function calcularPuntaje(cliente, q) {
+        const nombre = (cliente.nombre || '').toLowerCase().trim();
+        const cel = (cliente.celular || '').toLowerCase().trim();
+        const dir = (cliente.direccion || '').toLowerCase().trim();
+
+        // 1. Coincidencia EXACTA del nombre completo: "LCC 65" === "lcc 65"
+        if (nombre === q) {
+            return 100000;
+        }
+
+        // 2. Coincidencia de código exacto al inicio (seguido de espacio, guion, coma o fin)
+        // Ejemplo: Si busca "LCC 65", debe coincidir exactamente con "LCC 65", "LCC 65 casa", "LCC 65 - Mario"
+        // y NO ser superado por "LCC 6599" o "LCC 6528".
+        const regexCodigoExacto = new RegExp('^' + escapeRegex(q) + '(\\s|[^0-9a-zA-Z]|$)', 'i');
+        if (regexCodigoExacto.test(nombre)) {
+            return 90000 - nombre.length;
+        }
+
+        // 3. Si el término buscado es solo número (ej: "65"), busca "65" como palabra o código aislado
+        // Ejemplo: "LCC 65" o "LCC-65"
+        if (/^\d+$/.test(q)) {
+            const regexNumAislado = new RegExp('(^|\\s|[^0-9])' + q + '(\\s|[^0-9]|$)', 'i');
+            if (regexNumAislado.test(nombre)) {
+                return 85000 - nombre.length;
+            }
+        }
+
+        // 4. Comienza exactamente con el término buscado: "LCC 65..."
+        if (nombre.startsWith(q)) {
+            // Orden numérico natural: Extraer número siguiente para que 65 < 650 < 6528 < 6599
+            const resto = nombre.substring(q.length);
+            const matchNum = resto.match(/^\d+/);
+            let penalizacion = 0;
+            if (matchNum) {
+                penalizacion = parseInt(matchNum[0], 10) || 0;
+            }
+            return 70000 - (penalizacion > 0 ? penalizacion : nombre.length);
+        }
+
+        // 5. Contiene como palabra independiente dentro del nombre
+        const regexPalabra = new RegExp('(^|\\s|[^0-9a-zA-Z])' + escapeRegex(q) + '(\\b|\\s|[^0-9a-zA-Z]|$)', 'i');
+        if (regexPalabra.test(nombre)) {
+            return 50000 - nombre.length;
+        }
+
+        // 6. Contiene en cualquier parte del nombre
+        if (nombre.includes(q)) {
+            return 30000 - nombre.length;
+        }
+
+        // 7. Coincidencia por celular
+        if (cel && cel.includes(q)) {
+            return 20000;
+        }
+
+        // 8. Coincidencia por dirección / descripción
+        if (dir && dir.includes(q)) {
+            return 10000 - dir.length;
+        }
+
+        return 0;
+    }
+
+    function realizarBusqueda() {
+        const q = buscador.value.toLowerCase().trim();
         contenedor.innerHTML = '';
 
-        if (q.length < 2) {
-            if (marcadorTemporal) marcadorTemporal.setMap(null);
+        if (btnLimpiar) {
+            btnLimpiar.style.display = q.length > 0 ? 'flex' : 'none';
+        }
+
+        if (q.length < 1) {
+            contenedor.style.display = 'none';
+            if (marcadorTemporal) {
+                try { mapaGeneral.removeLayer(marcadorTemporal); } catch(e) {}
+                marcadorTemporal = null;
+            }
             return;
         }
 
-        const resultados = clientes
-            .filter(c =>
-                c.nombre.toLowerCase().includes(q) ||
-                (c.celular && c.celular.includes(q))
-            )
-            .slice(0, 8);
+        // Filtrar y calcular puntajes
+        const coincidencias = [];
+        clientes.forEach(c => {
+            const puntaje = calcularPuntaje(c, q);
+            if (puntaje > 0) {
+                coincidencias.push({ cliente: c, puntaje: puntaje });
+            }
+        });
+
+        // Ordenar de mayor a menor relevancia
+        coincidencias.sort((a, b) => b.puntaje - a.puntaje);
 
         // ==========================
         // SI NO HAY RESULTADOS
         // ==========================
-        if (resultados.length === 0) {
-
+        if (coincidencias.length === 0) {
+            contenedor.style.display = 'block';
             const btn = document.createElement('button');
             btn.type = 'button';
-            btn.className = 'list-group-item list-group-item-action text-danger';
-            btn.innerHTML = `❌ Cliente no registrado: <b>${q}</b>`;
+            btn.className = 'list-group-item list-group-item-action text-danger py-2';
+            btn.innerHTML = `<i class="fas fa-exclamation-circle mr-1"></i> Cliente no registrado: <b>${q}</b> <span class="badge badge-primary float-right">Registrar</span>`;
 
             btn.onclick = function () {
-
                 Swal.fire({
                     title: 'Cliente no registrado',
-                    text: '¿Desea registrar este cliente?',
+                    text: '¿Desea registrar al cliente "' + q + '"?',
                     icon: 'question',
                     showCancelButton: true,
                     confirmButtonText: 'Sí, registrar',
                     cancelButtonText: 'No'
                 }).then(result => {
-
                     if (result.isConfirmed) {
-
-                        // Ir al create enviando el nombre
-                        window.location.href =
-                            "{{ route('admin.clientes.create') }}?nombre=" + encodeURIComponent(q);
-
+                        window.location.href = "{{ route('admin.clientes.create') }}?nombre=" + encodeURIComponent(q);
                     }
-
                 });
-
             };
 
             contenedor.appendChild(btn);
@@ -1428,49 +1507,101 @@ document.addEventListener('DOMContentLoaded', function () {
         // ==========================
         // MOSTRAR RESULTADOS
         // ==========================
-        resultados.forEach(c => {
+        // Mostrar hasta 60 resultados con scroll fluido ("debería de aparecerme todo")
+        const limiteResultados = Math.min(coincidencias.length, 60);
+        contenedor.style.display = 'block';
 
+        for (let i = 0; i < limiteResultados; i++) {
+            const c = coincidencias[i].cliente;
             const btn = document.createElement('button');
             btn.type = 'button';
-            btn.className = 'list-group-item list-group-item-action';
+            btn.className = 'list-group-item list-group-item-action py-2 px-3 text-left';
             btn.dataset.id = c.id;
-            btn.innerHTML = `<b>${c.nombre}</b>`;
+            btn.dataset.nombre = c.nombre;
 
+            let htmlInfo = `
+                <div class="d-flex w-100 justify-content-between align-items-center">
+                    <span class="font-weight-bold text-dark text-truncate" style="max-width: 65%;">
+                        ${c.nombre}
+                    </span>
+                    ${c.celular ? `<span class="badge badge-light border text-muted"><i class="fas fa-phone-alt mr-1"></i>${c.celular}</span>` : ''}
+                </div>
+            `;
+            if (c.direccion) {
+                htmlInfo += `<small class="text-secondary d-block text-truncate mt-1"><i class="fas fa-map-marker-alt text-danger mr-1"></i>${c.direccion}</small>`;
+            }
+
+            btn.innerHTML = htmlInfo;
             contenedor.appendChild(btn);
-
-        });
-
-        const primerCliente = resultados.find(c => c.latitud && c.longitud);
-        if (primerCliente) {
-            mostrarClienteEnMapa(primerCliente, 'temporal');
         }
 
+        if (coincidencias.length > limiteResultados) {
+            const footer = document.createElement('div');
+            footer.className = 'list-group-item list-group-item-light text-center py-1 text-muted small';
+            footer.innerText = `Mostrando 60 de ${coincidencias.length} coincidencias. Escribe más letras para afinar.`;
+            contenedor.appendChild(footer);
+        }
+
+        // Ubicar en mapa el cliente más relevante (el primero)
+        const primerCliente = coincidencias[0]?.cliente;
+        if (primerCliente && primerCliente.latitud && primerCliente.longitud) {
+            mostrarClienteEnMapa(primerCliente, 'temporal');
+        }
+    }
+
+    buscador.addEventListener('input', realizarBusqueda);
+    buscador.addEventListener('focus', function() {
+        if (this.value.trim().length > 0) {
+            realizarBusqueda();
+        }
     });
 
-
-});
-</script>
-
-
-<script>
-document.addEventListener('click', function (e) {
-
-    const btn = e.target.closest('#resultadosClientes button');
-    if (!btn) return;
-
-    clienteSeleccionado = btn.dataset.id;
-    document.getElementById('buscadorCliente').value = btn.innerText;
-    document.getElementById('resultadosClientes').innerHTML = '';
-
-    if (marcadorTemporal) {
-        marcadorTemporal.setMap(null);
-        marcadorTemporal = null;
+    if (btnLimpiar) {
+        btnLimpiar.addEventListener('click', function() {
+            buscador.value = '';
+            clienteSeleccionado = null;
+            contenedor.innerHTML = '';
+            contenedor.style.display = 'none';
+            btnLimpiar.style.display = 'none';
+            if (marcadorTemporal) {
+                try { mapaGeneral.removeLayer(marcadorTemporal); } catch(e) {}
+                marcadorTemporal = null;
+            }
+            if (marcadorConfirmado) {
+                try { mapaGeneral.removeLayer(marcadorConfirmado); } catch(e) {}
+                marcadorConfirmado = null;
+            }
+            buscador.focus();
+        });
     }
 
-    const cliente = clientes.find(c => String(c.id) === String(clienteSeleccionado));
-    if (cliente) {
-        mostrarClienteEnMapa(cliente, 'confirmado');
-    }
+    // Cerrar lista al hacer clic fuera o seleccionar
+    document.addEventListener('click', function (e) {
+        const btnItem = e.target.closest('#resultadosClientes button');
+        if (btnItem) {
+            clienteSeleccionado = btnItem.dataset.id;
+            buscador.value = btnItem.dataset.nombre || btnItem.innerText.trim();
+            contenedor.innerHTML = '';
+            contenedor.style.display = 'none';
+            if (btnLimpiar) btnLimpiar.style.display = 'flex';
+
+            if (marcadorTemporal) {
+                try { mapaGeneral.removeLayer(marcadorTemporal); } catch(e) {}
+                marcadorTemporal = null;
+            }
+
+            const cliente = clientes.find(c => String(c.id) === String(clienteSeleccionado));
+            if (cliente) {
+                mostrarClienteEnMapa(cliente, 'confirmado');
+            }
+            return;
+        }
+
+        if (!e.target.closest('#buscadorCliente') && !e.target.closest('#resultadosClientes') && !e.target.closest('#btnLimpiarCliente')) {
+            contenedor.style.display = 'none';
+        }
+    });
+
 });
 </script>
 

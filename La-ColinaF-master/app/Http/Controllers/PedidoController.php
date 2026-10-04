@@ -62,6 +62,9 @@ class PedidoController extends Controller
         $clientes = Cliente::select(
             'id',
             'nombre',
+            'celular',
+            'direccion',
+            'referencia_celular',
             'ubicacion_gps',
             'latitud',
             'longitud'
