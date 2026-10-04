@@ -179,10 +179,14 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
     return _pedidosPorRuta[_rutaSeleccionada] ?? [];
   }
 
-  /// Solo las rutas que tienen pedidos formalmente asignados por el administrador
+  /// Solo las rutas que tienen pedidos PENDIENTES (no entregados) asignados por el administrador.
+  /// Si una ruta no tiene pedidos pendientes (o ya se completaron todos), desaparece automáticamente.
   List<String> get _rutasAsignadasDisponibles {
     final porRuta = _pedidosPorRuta;
-    return _rutasDisponibles.where((r) => (porRuta[r] ?? []).isNotEmpty).toList();
+    return _rutasDisponibles.where((r) {
+      final pedidosRuta = porRuta[r] ?? [];
+      return pedidosRuta.any((p) => p.estado != 'Entregado');
+    }).toList();
   }
 
   /// Pedidos pendientes (no entregados) de la ruta activa ordenados estrictamente por el admin
@@ -1814,9 +1818,12 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
           ),
           const SizedBox(height: 12),
 
-          // Solo mostrar las rutas asignadas por el administrador
+          // Solo mostrar las rutas asignadas que tengan pedidos pendientes
           for (final ruta in rutasVisibles)
-            _buildTarjetaRuta(ruta, porRuta[ruta] ?? []),
+            _buildTarjetaRuta(
+              ruta,
+              (porRuta[ruta] ?? []).where((p) => p.estado != 'Entregado').toList(),
+            ),
         ],
       ),
     );
@@ -1903,7 +1910,7 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
                           ],
                         ),
                         Text(
-                          '${pedidos.length} pedidos en total • Bs. ${totalMonto.toStringAsFixed(2)}',
+                          '${pedidos.length} pedidos pendientes • Bs. ${totalMonto.toStringAsFixed(2)}',
                           style: TextStyle(fontSize: 12, color: Colors.grey.shade700),
                         ),
                       ],
