@@ -47,7 +47,9 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
   LatLng? _posicionMoto;
   StreamSubscription<Position>? _positionStream;
   Pedido? _pedidoActivo;
-  List<LatLng> _puntosRutaCalle = [];
+  List<LatLng> _puntosRutaActiva = [];   // Tramo hacia el primer pedido a entregar (AZUL)
+  List<LatLng> _puntosRutaRestante = []; // Tramo hacia el resto de pedidos en cola (PLOMO)
+  List<LatLng> _puntosRutaCalle = [];    // Total puntos para detección de desvíos
   bool _cargandoRuta = false;
   double? _distanciaKm;
   int? _pedidoProximidadAbiertoId;
@@ -212,6 +214,8 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
     if (rutasValidas.isEmpty) {
       setState(() {
         _pedidoActivo = null;
+        _puntosRutaActiva = [];
+        _puntosRutaRestante = [];
         _puntosRutaCalle = [];
         _distanciaKm = null;
         _ultimoFingerprintSecuencia = null;
@@ -242,6 +246,8 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
     if (pendientes.isEmpty) {
       setState(() {
         _pedidoActivo = null;
+        _puntosRutaActiva = [];
+        _puntosRutaRestante = [];
         _puntosRutaCalle = [];
         _distanciaKm = null;
         _ultimoFingerprintSecuencia = null;
@@ -417,7 +423,8 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
     }
   }
 
-  /// Trazado de ruta sobre las calles reales con OSRM conectando paradas en orden
+  /// Trazado de ruta sobre las calles reales con OSRM:
+  /// Tramo hacia el primer pedido activo en AZUL, resto de la ruta en PLOMO
   Future<void> _calcularRutaCalle({bool forzar = false}) async {
     if (_cargandoRuta && !forzar) return;
 
@@ -425,6 +432,8 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
     if (pendientes.isEmpty) {
       if (mounted) {
         setState(() {
+          _puntosRutaActiva = [];
+          _puntosRutaRestante = [];
           _puntosRutaCalle = [];
           _distanciaKm = null;
         });
@@ -483,32 +492,94 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
           .join(';');
 
       final url = Uri.parse(
-        'https://router.project-osrm.org/route/v1/driving/$coordsParam?overview=full&geometries=geojson',
+        'https://router.project-osrm.org/route/v1/driving/$coordsParam?overview=full&geometries=geojson&steps=true',
       );
 
-      final resp = await http.get(url).timeout(const Duration(seconds: 5));
+      final resp = await http.get(url).timeout(const Duration(seconds: 6));
       if (resp.statusCode == 200) {
         final data = json.decode(resp.body);
         final routes = data['routes'] as List?;
         if (routes != null && routes.isNotEmpty) {
-          final geom = routes[0]['geometry'];
-          final coords = geom['coordinates'] as List;
-
-          // Distancia de la primera pierna (de la moto a la siguiente parada)
-          double distMetros = 0.0;
           final legs = routes[0]['legs'] as List?;
+
+          final List<LatLng> puntosActiva = [];
+          final List<LatLng> puntosRestante = [];
+          double distMetrosActiva = 0.0;
+
           if (legs != null && legs.isNotEmpty) {
-            distMetros = (legs[0]['distance'] as num?)?.toDouble() ?? 0.0;
-          } else {
-            distMetros = (routes[0]['distance'] as num?)?.toDouble() ?? 0.0;
+            // Leg 0: De la Moto a la Primera Parada (Pedido Activo) -> AZUL
+            distMetrosActiva = (legs[0]['distance'] as num?)?.toDouble() ?? 0.0;
+            final leg0Steps = (legs[0]['steps'] as List?) ?? [];
+            for (final step in leg0Steps) {
+              final stepGeom = step['geometry'];
+              if (stepGeom != null && stepGeom['coordinates'] is List) {
+                for (final coord in stepGeom['coordinates']) {
+                  final pt = LatLng((coord[1] as num).toDouble(), (coord[0] as num).toDouble());
+                  if (puntosActiva.isEmpty || puntosActiva.last != pt) {
+                    puntosActiva.add(pt);
+                  }
+                }
+              }
+            }
+
+            // Legs 1+: De la Primera Parada al resto de paradas programadas -> PLOMO
+            for (int i = 1; i < legs.length; i++) {
+              final legSteps = (legs[i]['steps'] as List?) ?? [];
+              for (final step in legSteps) {
+                final stepGeom = step['geometry'];
+                if (stepGeom != null && stepGeom['coordinates'] is List) {
+                  for (final coord in stepGeom['coordinates']) {
+                    final pt = LatLng((coord[1] as num).toDouble(), (coord[0] as num).toDouble());
+                    if (puntosRestante.isEmpty || puntosRestante.last != pt) {
+                      puntosRestante.add(pt);
+                    }
+                  }
+                }
+              }
+            }
+          }
+
+          // Respaldo si los steps vinieron vacíos: usar geometry general
+          if (puntosActiva.isEmpty) {
+            final geom = routes[0]['geometry'];
+            final coords = geom['coordinates'] as List;
+            final todosCoords = coords
+                .map((c) => LatLng((c[1] as num).toDouble(), (c[0] as num).toDouble()))
+                .toList();
+
+            if (paradasConCoords.length <= 1) {
+              puntosActiva.addAll(todosCoords);
+            } else {
+              final primerDestino = paradasConCoords.first;
+              int splitIdx = -1;
+              double menorDist = double.infinity;
+              for (int i = 0; i < todosCoords.length; i++) {
+                final d = Geolocator.distanceBetween(
+                  todosCoords[i].latitude,
+                  todosCoords[i].longitude,
+                  primerDestino.latitude,
+                  primerDestino.longitude,
+                );
+                if (d < menorDist) {
+                  menorDist = d;
+                  splitIdx = i;
+                }
+              }
+              if (splitIdx != -1 && splitIdx < todosCoords.length) {
+                puntosActiva.addAll(todosCoords.sublist(0, splitIdx + 1));
+                puntosRestante.addAll(todosCoords.sublist(splitIdx));
+              } else {
+                puntosActiva.addAll(todosCoords);
+              }
+            }
           }
 
           if (mounted) {
             setState(() {
-              _puntosRutaCalle = coords
-                  .map((c) => LatLng((c[1] as num).toDouble(), (c[0] as num).toDouble()))
-                  .toList();
-              _distanciaKm = distMetros / 1000.0;
+              _puntosRutaActiva = puntosActiva;
+              _puntosRutaRestante = puntosRestante;
+              _puntosRutaCalle = [...puntosActiva, ...puntosRestante];
+              _distanciaKm = distMetrosActiva / 1000.0;
               _cargandoRuta = false;
             });
             return;
@@ -527,6 +598,8 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
         primerDestino.longitude,
       );
       setState(() {
+        _puntosRutaActiva = [_posicionMoto!, primerDestino];
+        _puntosRutaRestante = paradasConCoords.length > 1 ? paradasConCoords : [];
         _puntosRutaCalle = waypoints;
         _distanciaKm = distMetros / 1000.0;
         _cargandoRuta = false;
@@ -625,6 +698,8 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
       // 🎉 ¡Ruta completada!
       setState(() {
         _pedidoActivo = null;
+        _puntosRutaActiva = [];
+        _puntosRutaRestante = [];
         _puntosRutaCalle = [];
       });
 
@@ -774,6 +849,8 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
       _enCamino.removeWhere((p) => p.id == pedido.id);
       if (_pedidoActivo?.id == pedido.id) {
         _pedidoActivo = null;
+        _puntosRutaActiva = [];
+        _puntosRutaRestante = [];
         _puntosRutaCalle = [];
         _distanciaKm = null;
         _pedidoProximidadAbiertoId = null;
@@ -2156,11 +2233,25 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
             if (_puntosRutaCalle.isNotEmpty)
               PolylineLayer(
                 polylines: [
-                  Polyline(
-                    points: _puntosRutaCalle,
-                    strokeWidth: 5.0,
-                    color: const Color(0xFF1E88E5), // Azul ruta calle
-                  ),
+                  // 1. Tramo restante hacia los pedidos posteriores (PLOMO)
+                  if (_puntosRutaRestante.isNotEmpty)
+                    Polyline(
+                      points: _puntosRutaRestante,
+                      strokeWidth: 4.5,
+                      color: const Color(0xFF78909C), // Plomo / Gris elegante
+                      borderColor: const Color(0xFF455A64),
+                      borderStrokeWidth: 1.0,
+                    ),
+
+                  // 2. Tramo activo hacia el primer pedido inmediato a entregar (AZUL VIBRANTE)
+                  if (_puntosRutaActiva.isNotEmpty)
+                    Polyline(
+                      points: _puntosRutaActiva,
+                      strokeWidth: 5.5,
+                      color: const Color(0xFF1E88E5), // Azul ruta activa
+                      borderColor: const Color(0xFF0D47A1),
+                      borderStrokeWidth: 1.2,
+                    ),
                 ],
               ),
             MarkerLayer(markers: markers),

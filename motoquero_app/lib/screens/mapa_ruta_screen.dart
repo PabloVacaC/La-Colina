@@ -39,7 +39,9 @@ class _MapaRutaScreenState extends State<MapaRutaScreen> {
   StreamSubscription<Position>? _positionStream;
 
   Pedido? _pedidoActivo;
-  List<LatLng> _puntosRutaCalle = [];
+  List<LatLng> _puntosRutaActiva = [];   // Tramo hacia la siguiente parada (AZUL)
+  List<LatLng> _puntosRutaRestante = []; // Tramo hacia el resto de paradas (PLOMO)
+  List<LatLng> _puntosRutaCalle = [];    // Total puntos para desvíos y encuadre
   bool _cargandoRuta = false;
   double? _distanciaKm;
   DateTime? _ultimoCalculoRuta;
@@ -91,6 +93,8 @@ class _MapaRutaScreenState extends State<MapaRutaScreen> {
     if (pendientes.isEmpty) {
       setState(() {
         _pedidoActivo = null;
+        _puntosRutaActiva = [];
+        _puntosRutaRestante = [];
         _puntosRutaCalle = [];
         _distanciaKm = null;
       });
@@ -169,7 +173,8 @@ class _MapaRutaScreenState extends State<MapaRutaScreen> {
     }
   }
 
-  /// Consulta la ruta exacta sobre calles usando OSRM (gratuito)
+  /// Consulta la ruta exacta sobre calles usando OSRM:
+  /// Tramo hacia el pedido activo en AZUL, resto de la ruta en PLOMO
   Future<void> _calcularRutaCalle({bool forzar = false}) async {
     if (_posicionMoto == null || _pedidoActivo == null) return;
     if (_cargandoRuta && !forzar) return;
@@ -177,34 +182,94 @@ class _MapaRutaScreenState extends State<MapaRutaScreen> {
     final cliente = _pedidoActivo!.cliente;
     if (cliente == null || cliente.latitud == null || cliente.longitud == null) return;
 
-    _ultimoCalculoRuta = DateTime.now();
-    final destino = LatLng(cliente.latitud!, cliente.longitud!);
+    final pendientes = _pedidosPendientes;
+    final paradasConCoords = <LatLng>[];
 
+    // 1. Destino inmediato (pedido activo)
+    final posActivo = LatLng(cliente.latitud!, cliente.longitud!);
+    paradasConCoords.add(posActivo);
+
+    // 2. Destinos posteriores en orden de entrega
+    for (final p in pendientes) {
+      final c = p.cliente;
+      if (c?.latitud != null && c?.longitud != null && c!.latitud != 0 && c.longitud != 0) {
+        final pos = LatLng(c.latitud!, c.longitud!);
+        if (!paradasConCoords.contains(pos)) {
+          paradasConCoords.add(pos);
+        }
+      }
+    }
+
+    _ultimoCalculoRuta = DateTime.now();
     setState(() => _cargandoRuta = true);
 
+    final waypoints = <LatLng>[_posicionMoto!, ...paradasConCoords];
+
     try {
+      final coordsParam = waypoints
+          .map((w) => '${w.longitude},${w.latitude}')
+          .join(';');
+
       final url = Uri.parse(
-        'https://router.project-osrm.org/route/v1/driving/'
-        '${_posicionMoto!.longitude},${_posicionMoto!.latitude};'
-        '${destino.longitude},${destino.latitude}'
-        '?overview=full&geometries=geojson',
+        'https://router.project-osrm.org/route/v1/driving/$coordsParam?overview=full&geometries=geojson&steps=true',
       );
 
-      final resp = await http.get(url).timeout(const Duration(seconds: 4));
+      final resp = await http.get(url).timeout(const Duration(seconds: 6));
       if (resp.statusCode == 200) {
         final data = json.decode(resp.body);
         final routes = data['routes'] as List?;
         if (routes != null && routes.isNotEmpty) {
-          final geom = routes[0]['geometry'];
-          final coords = geom['coordinates'] as List;
-          final distMetros = (routes[0]['distance'] as num?)?.toDouble() ?? 0.0;
+          final legs = routes[0]['legs'] as List?;
+
+          final List<LatLng> puntosActiva = [];
+          final List<LatLng> puntosRestante = [];
+          double distMetrosActiva = 0.0;
+
+          if (legs != null && legs.isNotEmpty) {
+            // Leg 0: De la moto a la primera parada (AZUL)
+            distMetrosActiva = (legs[0]['distance'] as num?)?.toDouble() ?? 0.0;
+            final leg0Steps = (legs[0]['steps'] as List?) ?? [];
+            for (final step in leg0Steps) {
+              final stepGeom = step['geometry'];
+              if (stepGeom != null && stepGeom['coordinates'] is List) {
+                for (final coord in stepGeom['coordinates']) {
+                  final pt = LatLng((coord[1] as num).toDouble(), (coord[0] as num).toDouble());
+                  if (puntosActiva.isEmpty || puntosActiva.last != pt) {
+                    puntosActiva.add(pt);
+                  }
+                }
+              }
+            }
+
+            // Legs 1+: Del primer pedido a los demás pedidos (PLOMO)
+            for (int i = 1; i < legs.length; i++) {
+              final legSteps = (legs[i]['steps'] as List?) ?? [];
+              for (final step in legSteps) {
+                final stepGeom = step['geometry'];
+                if (stepGeom != null && stepGeom['coordinates'] is List) {
+                  for (final coord in stepGeom['coordinates']) {
+                    final pt = LatLng((coord[1] as num).toDouble(), (coord[0] as num).toDouble());
+                    if (puntosRestante.isEmpty || puntosRestante.last != pt) {
+                      puntosRestante.add(pt);
+                    }
+                  }
+                }
+              }
+            }
+          }
+
+          if (puntosActiva.isEmpty) {
+            final geom = routes[0]['geometry'];
+            final coords = geom['coordinates'] as List;
+            puntosActiva.addAll(coords.map((c) => LatLng((c[1] as num).toDouble(), (c[0] as num).toDouble())));
+          }
 
           if (mounted) {
             setState(() {
-              _puntosRutaCalle = coords
-                  .map((c) => LatLng((c[1] as num).toDouble(), (c[0] as num).toDouble()))
-                  .toList();
-              _distanciaKm = distMetros / 1000.0;
+              _puntosRutaActiva = puntosActiva;
+              _puntosRutaRestante = puntosRestante;
+              _puntosRutaCalle = [...puntosActiva, ...puntosRestante];
+              _distanciaKm = distMetrosActiva / 1000.0;
               _cargandoRuta = false;
             });
             return;
@@ -220,11 +285,13 @@ class _MapaRutaScreenState extends State<MapaRutaScreen> {
       final distMetros = Geolocator.distanceBetween(
         _posicionMoto!.latitude,
         _posicionMoto!.longitude,
-        destino.latitude,
-        destino.longitude,
+        posActivo.latitude,
+        posActivo.longitude,
       );
       setState(() {
-        _puntosRutaCalle = [_posicionMoto!, destino];
+        _puntosRutaActiva = [_posicionMoto!, posActivo];
+        _puntosRutaRestante = paradasConCoords.length > 1 ? paradasConCoords : [];
+        _puntosRutaCalle = waypoints;
         _distanciaKm = distMetros / 1000.0;
         _cargandoRuta = false;
       });
@@ -513,17 +580,29 @@ class _MapaRutaScreenState extends State<MapaRutaScreen> {
                 userAgentPackageName: 'com.lacolina.motoquero.motoquero_app',
               ),
 
-              // Trazado de ruta activa (hacia el cliente actual)
+              // Trazado de ruta activa (hacia el cliente actual en AZUL) y restantes en PLOMO
               if (_puntosRutaCalle.isNotEmpty)
                 PolylineLayer(
                   polylines: [
-                    Polyline(
-                      points: _puntosRutaCalle,
-                      strokeWidth: 5.5,
-                      color: const Color(0xFF1E88E5),
-                      borderColor: const Color(0xFF0D47A1),
-                      borderStrokeWidth: 1.5,
-                    ),
+                    // 1. Tramo restante hacia los pedidos posteriores (PLOMO)
+                    if (_puntosRutaRestante.isNotEmpty)
+                      Polyline(
+                        points: _puntosRutaRestante,
+                        strokeWidth: 4.5,
+                        color: const Color(0xFF78909C), // Plomo / Gris elegante
+                        borderColor: const Color(0xFF455A64),
+                        borderStrokeWidth: 1.0,
+                      ),
+
+                    // 2. Tramo activo hacia el primer pedido inmediato a entregar (AZUL)
+                    if (_puntosRutaActiva.isNotEmpty)
+                      Polyline(
+                        points: _puntosRutaActiva,
+                        strokeWidth: 5.5,
+                        color: const Color(0xFF1E88E5), // Azul ruta activa
+                        borderColor: const Color(0xFF0D47A1),
+                        borderStrokeWidth: 1.5,
+                      ),
                   ],
                 ),
 
