@@ -250,7 +250,10 @@
                 <div class="pedido-header">
                     <h5><b>{{ $pedido->cliente->nombre }}</b></h5>
 
-                    <div>
+                    <div class="d-flex align-items-center">
+                        @if($pedido->orden)
+                            <span class="mr-2" style="font-weight:bold; font-size:1.1em; color:#fd7e14;">#{{ $pedido->orden }}</span>
+                        @endif
 
                         @if($pedido->emergencia)
                             <span style="color:red;font-size:20px;">🚨</span>
@@ -725,7 +728,7 @@ $ingresoTotal = $pedidos->sum('total_precio');
 
 <tr>
 
-<td>{{ $loop->iteration }}</td>
+<td>#{{ $pedido->orden > 0 ? $pedido->orden : $loop->iteration }}</td>
 
 <td>
 {{ $pedido->cliente->nombre ?? 'Sin cliente' }}

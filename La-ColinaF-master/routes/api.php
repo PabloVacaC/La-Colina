@@ -30,6 +30,7 @@ Route::post('/login', [MotoqueroApiController::class, 'login']);
 Route::get('/motoquero/{id}/pedidos', [MotoqueroApiController::class, 'getPedidos']);
 Route::post('/pedidos/{id}/tomar', [MotoqueroApiController::class, 'tomarPedido']);
 Route::post('/pedidos/{id}/rechazar', [MotoqueroApiController::class, 'rechazarPedido']);
+Route::post('/pedidos/{id}/cancelar', [MotoqueroApiController::class, 'cancelarPedido']);
 Route::post('/pedidos/{id}/finalizar', [MotoqueroApiController::class, 'finalizarPedido']);
 Route::post('/motoquero/{id}/tomar-ruta', [MotoqueroApiController::class, 'tomarRuta']);
 Route::match(['get', 'post'], '/motoquero/{id}/restaurar-asignados', [MotoqueroApiController::class, 'restaurarAsignados']);

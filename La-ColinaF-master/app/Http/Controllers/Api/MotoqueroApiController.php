@@ -164,11 +164,42 @@ class MotoqueroApiController extends Controller
         $pedido = Pedido::findOrFail($id);
         $pedido->estado = 'Pendiente';
         $pedido->motoquero_id = null;
+        $pedido->orden = 0;
         $pedido->save();
 
         return response()->json([
             'success' => true,
             'message' => 'Pedido rechazado y devuelto a pendientes.',
+        ]);
+    }
+
+    /**
+     * Cancelar entrega de un pedido (cliente no sale, no atiende o no se encuentra)
+     * Desasigna el pedido del repartidor y lo regresa a estado 'Pendiente' con orden 0,
+     * permitiendo que desaparezca de la ruta activa del repartidor y este continúe a la siguiente ubicación.
+     */
+    public function cancelarPedido(Request $request, $id)
+    {
+        $pedido = Pedido::findOrFail($id);
+
+        if ($pedido->estado === 'Entregado') {
+            return response()->json([
+                'success' => false,
+                'message' => 'Un pedido ya entregado no puede ser cancelado.',
+            ], 422);
+        }
+
+        $pedido->estado = 'Pendiente';
+        $pedido->motoquero_id = null;
+        $pedido->orden = 0;
+        $pedido->save();
+
+        Log::info("Entrega del pedido #{$pedido->id} cancelada por el distribuidor (cliente no sale). Devuelto a pendientes.");
+
+        return response()->json([
+            'success'   => true,
+            'message'   => 'Entrega cancelada correctamente. El pedido ha sido retirado de tu ruta y devuelto a pendientes.',
+            'pedido_id' => $pedido->id,
         ]);
     }
 
@@ -405,6 +436,8 @@ class MotoqueroApiController extends Controller
                 'registrado_en_iso'   => $ultima ? $ultima->registrado_en->toIso8601String() : null,
                 'pedido_actual'       => $pedidoActual ? [
                     'id'               => $pedidoActual->id,
+                    'orden'            => $pedidoActual->orden,
+                    'ruta'             => $pedidoActual->ruta,
                     'cliente_nombre'   => $pedidoActual->cliente->nombre ?? 'Sin nombre',
                     'cliente_telefono' => $pedidoActual->cliente->celular ?? '',
                     'cliente_direccion'=> $pedidoActual->cliente->direccion ?? '',

@@ -436,6 +436,57 @@ class _MapaRutaScreenState extends State<MapaRutaScreen> {
     }
   }
 
+  Future<void> _cancelarEntrega(Pedido pedido) async {
+    final confirm = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        title: const Row(
+          children: [
+            Icon(Icons.warning_amber_rounded, color: Color(0xFFD32F2F), size: 26),
+            SizedBox(width: 8),
+            Text('Cancelar Entrega', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 18)),
+          ],
+        ),
+        content: Text('¿Deseas cancelar la entrega del Pedido #${pedido.id} (${pedido.cliente?.nombre ?? "Cliente"})? El pedido se retirará de tu ruta y pasarás a la siguiente ubicación.'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Volver', style: TextStyle(color: Colors.grey, fontWeight: FontWeight.bold)),
+          ),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(
+              backgroundColor: const Color(0xFFD32F2F),
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+            ),
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('Sí, Cancelar Pedido', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+          ),
+        ],
+      ),
+    );
+
+    if (confirm != true) return;
+
+    final success = await _api.cancelarPedido(pedido.id, motivo: 'Cliente no sale / no atiende');
+    if (success && mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          backgroundColor: const Color(0xFFD32F2F),
+          content: Text('Entrega del pedido #${pedido.id} cancelada. Pasando a la siguiente parada...'),
+          duration: const Duration(seconds: 3),
+        ),
+      );
+
+      widget.pedidos.removeWhere((p) => p.id == pedido.id);
+      widget.onPedidosActualizados();
+
+      setState(() {
+        _seleccionarPedidoInicial();
+      });
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final pendientes = _pedidosPendientes;
@@ -731,7 +782,7 @@ class _MapaRutaScreenState extends State<MapaRutaScreen> {
                     borderRadius: BorderRadius.circular(8),
                   ),
                   child: Text(
-                    'PARADA #$numeroParada • ${pedido.estado.toUpperCase()}',
+                    'PARADA ${pedido.orden > 0 ? pedido.orden : numeroParada} • ${pedido.estado.toUpperCase()}',
                     style: const TextStyle(
                       color: Colors.white,
                       fontSize: 11,
@@ -815,6 +866,20 @@ class _MapaRutaScreenState extends State<MapaRutaScreen> {
                   tooltip: 'Subir foto de la casa',
                 ),
                 const SizedBox(width: 8),
+
+                // Botón Cancelar Entrega (si el cliente no sale)
+                if (esEnCamino) ...[
+                  IconButton(
+                    style: IconButton.styleFrom(
+                      backgroundColor: const Color(0xFFFFEBEE),
+                      foregroundColor: const Color(0xFFD32F2F),
+                    ),
+                    onPressed: () => _cancelarEntrega(pedido),
+                    icon: const Icon(Icons.cancel_outlined),
+                    tooltip: 'Cancelar entrega (cliente no salió)',
+                  ),
+                  const SizedBox(width: 8),
+                ],
 
                 // Botón Principal: Tomar Pedido o Entregar
                 Expanded(

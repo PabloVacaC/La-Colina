@@ -189,7 +189,7 @@
 
                     ${activePedido ? `
                         <div class="p-2 mb-1 rounded bg-light border border-warning small">
-                            <span class="text-warning font-weight-bold"><i class="fas fa-box"></i> Pedido #${activePedido.id} en camino:</span><br>
+                            <span class="text-warning font-weight-bold"><i class="fas fa-box"></i> ${activePedido.orden ? 'Parada #' + activePedido.orden + ' • ' : ''}Pedido #${activePedido.id} en camino:</span><br>
                             <b>Cliente:</b> ${activePedido.cliente_nombre}<br>
                             <b>Dir:</b> ${activePedido.cliente_direccion || 'Sin dirección'}<br>
                             <b>Monto:</b> Bs. ${activePedido.total_precio}

@@ -667,6 +667,169 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
   }
 
   // =========================================================================
+  // CANCELACIÓN DE ENTREGA Y CONTINUACIÓN A LA SIGUIENTE PARADA
+  // =========================================================================
+
+  Future<void> _confirmarCancelarEntrega(Pedido pedido) async {
+    final confirm = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        title: const Row(
+          children: [
+            Icon(Icons.warning_amber_rounded, color: Color(0xFFD32F2F), size: 26),
+            SizedBox(width: 8),
+            Text('Cancelar Entrega', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 18)),
+          ],
+        ),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              '¿Deseas cancelar la entrega del Pedido #${pedido.id}?',
+              style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 15),
+            ),
+            const SizedBox(height: 8),
+            Text(
+              'Cliente: ${pedido.cliente?.nombre ?? "Desconocido"}',
+              style: const TextStyle(color: Colors.black87),
+            ),
+            const SizedBox(height: 12),
+            Container(
+              padding: const EdgeInsets.all(10),
+              decoration: BoxDecoration(
+                color: const Color(0xFFFFF3E0),
+                borderRadius: BorderRadius.circular(8),
+                border: Border.all(color: Colors.orange.shade200),
+              ),
+              child: const Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Icon(Icons.info_outline, size: 18, color: Color(0xFFE65100)),
+                  SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      'El pedido se retirará de tu ruta (ej: cliente no salió o no atiende) y pasarás automáticamente a la siguiente ubicación.',
+                      style: TextStyle(fontSize: 12, color: Color(0xFFE65100)),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Volver', style: TextStyle(color: Colors.grey, fontWeight: FontWeight.bold)),
+          ),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(
+              backgroundColor: const Color(0xFFD32F2F),
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+            ),
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('Sí, Cancelar Pedido', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+          ),
+        ],
+      ),
+    );
+
+    if (confirm == true) {
+      await _cancelarPedidoYContinuar(pedido);
+    }
+  }
+
+  Future<void> _cancelarPedidoYContinuar(Pedido pedido) async {
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (_) => const Center(
+        child: CircularProgressIndicator(color: Color(0xFFD32F2F)),
+      ),
+    );
+
+    final success = await _api.cancelarPedido(pedido.id, motivo: 'Cliente no sale / no atiende');
+
+    if (mounted) {
+      Navigator.of(context, rootNavigator: true).pop(); // Cerrar loader
+    }
+
+    if (!mounted) return;
+
+    if (!success) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          backgroundColor: Colors.red,
+          content: Text('No se pudo cancelar el pedido. Verifica tu conexión a internet.'),
+        ),
+      );
+      return;
+    }
+
+    // 1. Quitar de las listas locales de inmediato
+    setState(() {
+      _asignados.removeWhere((p) => p.id == pedido.id);
+      _enCamino.removeWhere((p) => p.id == pedido.id);
+      if (_pedidoActivo?.id == pedido.id) {
+        _pedidoActivo = null;
+        _puntosRutaCalle = [];
+        _distanciaKm = null;
+        _pedidoProximidadAbiertoId = null;
+      }
+    });
+
+    HapticFeedback.mediumImpact();
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        backgroundColor: const Color(0xFFD32F2F),
+        duration: const Duration(seconds: 4),
+        content: Row(
+          children: [
+            const Icon(Icons.cancel, color: Colors.white),
+            const SizedBox(width: 8),
+            Expanded(
+              child: Text(
+                'Entrega #${pedido.id} cancelada. Pasando a la siguiente ubicación...',
+                style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+
+    // 2. Refrescar datos desde el servidor
+    await _cargarPedidos(silent: true);
+
+    // 3. Buscar la siguiente parada pendiente de esta ruta
+    final pendientesRestantes = _pedidosPendientesRutaActiva;
+
+    if (pendientesRestantes.isNotEmpty) {
+      setState(() {
+        _pedidoActivo = pendientesRestantes.first;
+        _pedidoProximidadAbiertoId = null;
+      });
+      _calcularRutaCalle(forzar: true);
+
+      if (_posicionMoto != null && _pedidoActivo?.cliente?.latitud != null) {
+        _mapController.move(
+          LatLng(_pedidoActivo!.cliente!.latitud!, _pedidoActivo!.cliente!.longitud!),
+          15.5,
+        );
+      }
+    } else {
+      // Si la ruta activa quedó sin pedidos pendientes, verificar otras rutas o finalizar
+      _verificarYActualizarPedidoActivo();
+
+      if (_pedidoActivo == null) {
+        _mostrarDialogoRutaCompletada(_rutaSeleccionada);
+      }
+    }
+  }
+
+  // =========================================================================
   // VENTANA EXACTA DE ENTREGA (CAPTURA DEL USUARIO)
   // =========================================================================
 
@@ -724,8 +887,8 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
                                   Flexible(
                                     child: Text(
                                       esEntregado
-                                          ? 'Pedido #${pedido.id} • Entregado'
-                                          : 'Pedido #${pedido.id} • En Camino',
+                                          ? 'Parada ${pedido.orden > 0 ? pedido.orden : 1} • Entregado'
+                                          : 'Parada ${pedido.orden > 0 ? pedido.orden : 1} • En Camino',
                                       style: TextStyle(
                                         fontWeight: FontWeight.bold,
                                         color: esEntregado ? const Color(0xFF2E7D32) : const Color(0xFFEF6C00),
@@ -937,8 +1100,8 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
                         ),
                       ],
 
-                      // Botón COMPLETAR ENTREGA (solo disponible si el pedido aún no fue entregado)
-                      if (!esEntregado)
+                      // Botones de acción: COMPLETAR ENTREGA y CANCELAR ENTREGA (solo disponible si no ha sido entregado)
+                      if (!esEntregado) ...[
                         SizedBox(
                           width: double.infinity,
                           child: ElevatedButton.icon(
@@ -961,7 +1124,33 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
                               shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
                             ),
                           ),
-                        )
+                        ),
+                        const SizedBox(height: 10),
+                        SizedBox(
+                          width: double.infinity,
+                          child: OutlinedButton.icon(
+                            onPressed: () {
+                              Navigator.pop(ctx);
+                              WidgetsBinding.instance.addPostFrameCallback((_) {
+                                if (mounted) {
+                                  _confirmarCancelarEntrega(pedido);
+                                }
+                              });
+                            },
+                            icon: const Icon(Icons.cancel_outlined, size: 20, color: Color(0xFFD32F2F)),
+                            label: const Text(
+                              'CANCELAR ENTREGA',
+                              style: TextStyle(fontSize: 14, fontWeight: FontWeight.bold, color: Color(0xFFD32F2F)),
+                            ),
+                            style: OutlinedButton.styleFrom(
+                              side: const BorderSide(color: Color(0xFFD32F2F), width: 1.5),
+                              backgroundColor: const Color(0xFFFFEBEE),
+                              padding: const EdgeInsets.symmetric(vertical: 13),
+                              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                            ),
+                          ),
+                        ),
+                      ]
                       else
                         // Mensaje de solo lectura: el distribuidor ya no puede modificar el pedido
                         Container(
@@ -1703,8 +1892,8 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
                     ),
                     const SizedBox(width: 6),
                     Text(
-                      '• Pedido #${p.id}',
-                      style: TextStyle(fontSize: 11, color: Colors.grey.shade600),
+                      '• Parada ${p.orden > 0 ? p.orden : posicionRelativa}',
+                      style: TextStyle(fontSize: 11, color: Colors.grey.shade700, fontWeight: FontWeight.w600),
                     ),
                   ],
                 ),
@@ -2057,7 +2246,7 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
                       borderRadius: BorderRadius.circular(6),
                     ),
                     child: Text(
-                      '${p.emergencia ? "🚨 EMERGENCIA • " : ""}Pedido #${p.id} • Parada #${p.orden > 0 ? p.orden : 1}${_distanciaKm != null ? " • ${_distanciaKm!.toStringAsFixed(1)} km" : ""}',
+                      '${p.emergencia ? "🚨 EMERGENCIA • " : ""}Parada ${p.orden > 0 ? p.orden : 1}${_distanciaKm != null ? " • ${_distanciaKm!.toStringAsFixed(1)} km" : ""}',
                       style: TextStyle(
                         fontWeight: FontWeight.bold,
                         fontSize: 12,
@@ -2332,7 +2521,7 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
                     subtitle: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        Text('Pedido #${p.id} • Ruta ${p.ruta ?? 'A'}', style: TextStyle(fontSize: 11, color: Colors.grey.shade600)),
+                        Text('Parada ${p.orden > 0 ? p.orden : 1} • Ruta ${p.ruta ?? 'A'}', style: TextStyle(fontSize: 11, color: Colors.grey.shade700, fontWeight: FontWeight.w600)),
                         Text(c?.direccion ?? 'S/D', style: const TextStyle(fontSize: 12), maxLines: 1, overflow: TextOverflow.ellipsis),
                       ],
                     ),

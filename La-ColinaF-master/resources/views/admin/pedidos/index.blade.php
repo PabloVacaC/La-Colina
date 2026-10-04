@@ -670,7 +670,7 @@
                                 @else
                                     @foreach($porAsignarRuta as $index => $p)
                                         <div class="pedido-item" data-id="{{ $p->id }}">
-                                            <b>#{{ $index + 1 }}</b> – {{ $p->cliente->nombre }}
+                                            <b>#{{ $p->orden && $p->orden > 0 ? $p->orden : ($index + 1) }}</b> – {{ $p->cliente->nombre }}
 
                                             <div>
                                                 <small>
@@ -742,7 +742,7 @@
 
                                         <div class="pedido-item pedido-card" data-id="{{ $p->id }}">
 
-                                            <b>#{{ $index + 1 }}</b> - {{ $p->cliente->nombre }}
+                                            <b>#{{ $p->orden && $p->orden > 0 ? $p->orden : ($index + 1) }}</b> - {{ $p->cliente->nombre }}
 
                                             {{-- GPS --}}
                                             <div>
@@ -811,7 +811,7 @@
                                 @else
                                     @foreach($enCaminoRuta as $index => $p)
                                         <div class="pedido-item mb-3 p-3 border rounded" data-id="{{ $p->id }}">
-                                            <b>{{ $p->cliente->nombre }}</b><br>
+                                            <b>#{{ $p->orden && $p->orden > 0 ? $p->orden : ($index + 1) }}</b> - <b>{{ $p->cliente->nombre }}</b><br>
 
                                             <div>
                                                 <small>
@@ -913,7 +913,7 @@
                                     @foreach($entregadosRuta as $p)
                                         <div class="pedido-item">
                                             <div class="d-flex justify-content-between align-items-center">
-                                                <b>{{ $p->cliente->nombre }}</b>
+                                                <b>#{{ $p->orden && $p->orden > 0 ? $p->orden : '' }} {{ $p->cliente->nombre }}</b>
                                                 <button 
                                                     class="btn btn-sm btn-success px-2 py-0 btnEditarEntrega"
                                                     style="font-size:12px;"

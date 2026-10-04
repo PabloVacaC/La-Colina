@@ -166,6 +166,28 @@ class ApiService {
     return false;
   }
 
+  /// Cancelar entrega de un pedido (por ejemplo, el cliente no sale, no atiende o no se encuentra)
+  Future<bool> cancelarPedido(int pedidoId, {String? motivo}) async {
+    try {
+      final url = Uri.parse('$_baseUrl/pedidos/$pedidoId/cancelar');
+      final response = await http
+          .post(
+            url,
+            headers: _headers,
+            body: jsonEncode({if (motivo != null) 'motivo': motivo}),
+          )
+          .timeout(const Duration(seconds: 10));
+
+      if (response.statusCode == 200) {
+        final data = jsonDecode(response.body);
+        return data['success'] == true;
+      }
+    } catch (_) {}
+
+    // Fallback de compatibilidad si el backend aún no ha desplegado la ruta /cancelar
+    return rechazarPedido(pedidoId);
+  }
+
   /// Tomar todos los pedidos de una ruta
   Future<bool> tomarRuta(int motoqueroId, String ruta) async {
     try {
