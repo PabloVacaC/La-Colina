@@ -81,32 +81,65 @@ class MotoqueroApiController extends Controller
 
         $hoy = Carbon::today();
 
-        // Pedidos Asignados (por tomar/aceptar): Solo pedidos confirmados en estado 'Asignado' por el administrador
-        $asignados = Pedido::with(['cliente', 'detalles'])
+        // Pedidos Asignados
+        $asignadosRaw = Pedido::with(['cliente', 'detalles'])
             ->where('motoquero_id', $motoqueroId)
             ->where('estado', 'Asignado')
             ->orderBy('orden', 'asc')
             ->orderBy('id', 'asc')
-            ->get()
-            ->map(fn($p) => $this->formatPedido($p));
+            ->get();
 
-        // Pedidos En Camino (activos): Todos los pedidos actualmente en curso de este repartidor
-        $enCamino = Pedido::with(['cliente', 'detalles'])
+        // Pedidos En Camino (activos)
+        $enCaminoRaw = Pedido::with(['cliente', 'detalles'])
             ->where('motoquero_id', $motoqueroId)
             ->where('estado', 'En camino')
             ->orderBy('orden', 'asc')
             ->orderBy('updated_at', 'desc')
-            ->get()
-            ->map(fn($p) => $this->formatPedido($p));
+            ->get();
 
         // Pedidos Entregados de hoy
-        $entregados = Pedido::with(['cliente', 'detalles'])
+        $entregadosRaw = Pedido::with(['cliente', 'detalles'])
             ->where('motoquero_id', $motoqueroId)
             ->where('estado', 'Entregado')
             ->whereDate('updated_at', $hoy)
             ->orderBy('updated_at', 'desc')
-            ->get()
-            ->map(fn($p) => $this->formatPedido($p));
+            ->get();
+
+        // Obtener última compra de cada cliente para pre-cargar en el formulario de entrega
+        $todos = $asignadosRaw->concat($enCaminoRaw)->concat($entregadosRaw);
+        $clienteIds = $todos->pluck('cliente_id')->filter()->unique();
+
+        $ultimasComprasMap = collect();
+        if ($clienteIds->isNotEmpty()) {
+            $ultimosEntregados = Pedido::with('detalles')
+                ->whereIn('cliente_id', $clienteIds)
+                ->where('estado', 'Entregado')
+                ->orderBy('id', 'desc')
+                ->get()
+                ->groupBy('cliente_id')
+                ->map(fn($group) => $group->first());
+
+            foreach ($ultimosEntregados as $cid => $pedEnt) {
+                if ($pedEnt && $pedEnt->detalles->isNotEmpty()) {
+                    $ultimasComprasMap[$cid] = $pedEnt->detalles->map(function ($d) {
+                        return [
+                            'id'              => $d->id,
+                            'producto'        => $d->producto,
+                            'detalle'         => $d->detalle,
+                            'cantidad'        => (int) $d->cantidad,
+                            'precio_unitario' => (float) $d->precio_unitario,
+                            'precio_total'    => (float) $d->precio_total,
+                        ];
+                    })->values()->toArray();
+                }
+            }
+        }
+
+        $format = fn($p) => $this->formatPedido($p, $ultimasComprasMap->get($p->cliente_id, []));
+
+        $asignados = $asignadosRaw->map($format);
+        $enCamino = $enCaminoRaw->map($format);
+        $entregados = $entregadosRaw->map($format);
 
         // Lista de productos del sistema para modal de entrega
         $productos = Producto::all()->map(function ($p) {
@@ -461,13 +494,38 @@ class MotoqueroApiController extends Controller
     /**
      * Formateador auxiliar para pedidos
      */
-    private function formatPedido(Pedido $p): array
+    private function formatPedido(Pedido $p, ?array $ultimaCompra = null): array
     {
         $cliente = $p->cliente;
 
         $imagenCasaUrl = null;
         if ($cliente && $cliente->imagen_casa) {
             $imagenCasaUrl = asset('storage/' . $cliente->imagen_casa);
+        }
+
+        // Si no se proporcionó $ultimaCompra pero el pedido tiene cliente, buscarla
+        if ($ultimaCompra === null && $p->cliente_id) {
+            $ultimo = Pedido::with('detalles')
+                ->where('cliente_id', $p->cliente_id)
+                ->where('estado', 'Entregado')
+                ->where('id', '!=', $p->id)
+                ->orderBy('id', 'desc')
+                ->first();
+
+            if ($ultimo && $ultimo->detalles->isNotEmpty()) {
+                $ultimaCompra = $ultimo->detalles->map(function ($d) {
+                    return [
+                        'id'              => $d->id,
+                        'producto'        => $d->producto,
+                        'detalle'         => $d->detalle,
+                        'cantidad'        => (int) $d->cantidad,
+                        'precio_unitario' => (float) $d->precio_unitario,
+                        'precio_total'    => (float) $d->precio_total,
+                    ];
+                })->values()->toArray();
+            } else {
+                $ultimaCompra = [];
+            }
         }
 
         return [
@@ -503,6 +561,7 @@ class MotoqueroApiController extends Controller
                     'precio_total'    => (float) $d->precio_total,
                 ];
             }),
+            'ultima_compra'                 => $ultimaCompra ?? [],
         ];
     }
 }

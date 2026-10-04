@@ -1208,6 +1208,7 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
       builder: (ctx) => _DialogoFinalizarEntrega(
         pedido: pedido,
         api: _api,
+        pedidosEntregados: _entregados,
       ),
     );
 
@@ -2632,11 +2633,13 @@ class _FilaProductoItem {
 class _DialogoFinalizarEntrega extends StatefulWidget {
   final Pedido pedido;
   final ApiService api;
+  final List<Pedido>? pedidosEntregados;
 
   const _DialogoFinalizarEntrega({
     Key? key,
     required this.pedido,
     required this.api,
+    this.pedidosEntregados,
   }) : super(key: key);
 
   @override
@@ -2647,6 +2650,7 @@ class _DialogoFinalizarEntregaState extends State<_DialogoFinalizarEntrega> {
   List<ProductoItem> _catalogo = [];
   final List<_FilaProductoItem> _filas = [];
   String _metodoPago = '';
+  bool _esUltimaCompra = false;
 
   @override
   void initState() {
@@ -2687,9 +2691,29 @@ class _DialogoFinalizarEntregaState extends State<_DialogoFinalizarEntrega> {
 
     _catalogo = mapaProds.values.toList();
 
-    // 3. Inicializar filas desde detalles del pedido si existen
+    // 3. Determinar qué productos cargar por defecto:
+    List<DetallePedido> itemsACargar = [];
     if (widget.pedido.detalles.isNotEmpty) {
-      for (final det in widget.pedido.detalles) {
+      // 3.1 Si el pedido actual ya tiene detalles específicos asignados
+      itemsACargar = widget.pedido.detalles;
+    } else if (widget.pedido.ultimaCompra.isNotEmpty) {
+      // 3.2 Repetir la ÚLTIMA COMPRA del cliente (obtenida del servidor)
+      itemsACargar = widget.pedido.ultimaCompra;
+      _esUltimaCompra = true;
+    } else if (widget.pedidosEntregados != null && widget.pedido.cliente != null) {
+      // 3.3 Fallback de sesión: buscar si ya se entregó a este cliente en la sesión actual
+      for (final pEnt in widget.pedidosEntregados!) {
+        if (pEnt.cliente?.id == widget.pedido.cliente!.id && pEnt.detalles.isNotEmpty) {
+          itemsACargar = pEnt.detalles;
+          _esUltimaCompra = true;
+          break;
+        }
+      }
+    }
+
+    // Inicializar filas con los items determinados
+    if (itemsACargar.isNotEmpty) {
+      for (final det in itemsACargar) {
         ProductoItem? prodMatch;
         for (final p in _catalogo) {
           if (p.nombre.toLowerCase().trim() == det.producto.toLowerCase().trim()) {
@@ -2707,7 +2731,7 @@ class _DialogoFinalizarEntregaState extends State<_DialogoFinalizarEntrega> {
       }
     }
 
-    // 4. Si aún no hay filas, poner por defecto el primer producto
+    // 4. Si es CLIENTE NUEVO (sin compras anteriores ni detalles), poner por defecto el primer producto con cantidad = 1
     if (_filas.isEmpty && _catalogo.isNotEmpty) {
       final primerProd = _catalogo.first;
       _filas.add(_FilaProductoItem(
@@ -2804,6 +2828,63 @@ class _DialogoFinalizarEntregaState extends State<_DialogoFinalizarEntrega> {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
+                    // Aviso informativo: Última compra habitual vs Cliente nuevo
+                    if (_esUltimaCompra) ...[
+                      Container(
+                        width: double.infinity,
+                        margin: const EdgeInsets.only(bottom: 12),
+                        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
+                        decoration: BoxDecoration(
+                          color: const Color(0xFFE8F5E9),
+                          borderRadius: BorderRadius.circular(6),
+                          border: Border.all(color: const Color(0xFF81C784)),
+                        ),
+                        child: Row(
+                          children: const [
+                            Icon(Icons.history, size: 16, color: Color(0xFF2E7D32)),
+                            SizedBox(width: 8),
+                            Expanded(
+                              child: Text(
+                                'Repitiendo última compra registrada de este cliente',
+                                style: TextStyle(
+                                  fontSize: 12,
+                                  fontWeight: FontWeight.bold,
+                                  color: Color(0xFF2E7D32),
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ] else if (widget.pedido.detalles.isEmpty) ...[
+                      Container(
+                        width: double.infinity,
+                        margin: const EdgeInsets.only(bottom: 12),
+                        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
+                        decoration: BoxDecoration(
+                          color: const Color(0xFFE3F2FD),
+                          borderRadius: BorderRadius.circular(6),
+                          border: Border.all(color: const Color(0xFF90CAF9)),
+                        ),
+                        child: Row(
+                          children: const [
+                            Icon(Icons.person_add_alt_1, size: 16, color: Color(0xFF1565C0)),
+                            SizedBox(width: 8),
+                            Expanded(
+                              child: Text(
+                                'Cliente nuevo o sin compras previas (Cantidad inicial: 1)',
+                                style: TextStyle(
+                                  fontSize: 12,
+                                  fontWeight: FontWeight.bold,
+                                  color: Color(0xFF1565C0),
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
+
                     // Contenedor scroll horizontal con ancho fijo de tabla
                     SingleChildScrollView(
                       scrollDirection: Axis.horizontal,

@@ -80,6 +80,7 @@ class Pedido {
   final String? createdAt;
   final Cliente? cliente;
   final List<DetallePedido> detalles;
+  final List<DetallePedido> ultimaCompra;
 
   Pedido({
     required this.id,
@@ -93,11 +94,15 @@ class Pedido {
     this.createdAt,
     this.cliente,
     required this.detalles,
+    this.ultimaCompra = const [],
   });
 
   factory Pedido.fromJson(Map<String, dynamic> json) {
     var rawDetalles = json['detalles'] as List? ?? [];
     List<DetallePedido> detallesList = rawDetalles.map((d) => DetallePedido.fromJson(d)).toList();
+
+    var rawUltimaCompra = json['ultima_compra'] as List? ?? [];
+    List<DetallePedido> ultimaCompraList = rawUltimaCompra.map((d) => DetallePedido.fromJson(d)).toList();
 
     return Pedido(
       id: json['id'] ?? 0,
@@ -111,6 +116,7 @@ class Pedido {
       createdAt: json['created_at'],
       cliente: json['cliente'] != null ? Cliente.fromJson(json['cliente']) : null,
       detalles: detallesList,
+      ultimaCompra: ultimaCompraList,
     );
   }
 }
