@@ -7,18 +7,6 @@
 
 @section('content')
 
-<style>
-/* 🚫 EVITAR PANTALLAS BLANCAS O PRELOADER EN CUALQUIER RECARGA O NAVEGACIÓN */
-.preloader, .animation__shake, .preloader img {
-    display: none !important;
-    opacity: 0 !important;
-    visibility: hidden !important;
-    pointer-events: none !important;
-    height: 0 !important;
-    width: 0 !important;
-}
-</style>
-
 
 {{-- MAPA PEDIDOS NUEVOS --}}
 <div class="card mb-4">
@@ -1757,11 +1745,6 @@ document.addEventListener('DOMContentLoaded', function () {
         // Si la pestaña no está activa, no recargar
         if (document.hidden) return;
 
-        // Si hay modal abierto o Swal activo, no interrumpir al usuario
-        if (document.querySelector('.modal.show') || (typeof Swal !== 'undefined' && Swal.isVisible && Swal.isVisible())) {
-            return;
-        }
-
         fetch(window.location.href, {
             headers: {
                 'X-Requested-With': 'XMLHttpRequest'
@@ -1773,25 +1756,20 @@ document.addEventListener('DOMContentLoaded', function () {
             const parser = new DOMParser();
             const doc = parser.parseFromString(html, 'text/html');
 
-            let huboCambios = false;
-            ['#contenedor-pedidos-nuevos', '#contenedor-pedidos-en-camino', '#contenedor-pedidos-entregados'].forEach(sel => {
-                const nuevo = doc.querySelector(sel);
-                const actual = document.querySelector(sel);
-                if (nuevo && actual && actual.innerHTML.trim() !== nuevo.innerHTML.trim()) {
-                    actual.innerHTML = nuevo.innerHTML;
-                    huboCambios = true;
-                }
-            });
+            const nuevo = doc.querySelector('#contenedor-pedidos-nuevos');
+            const actual = document.querySelector('#contenedor-pedidos-nuevos');
 
-            if (huboCambios) {
+            if (nuevo && actual) {
+
+                actual.innerHTML = nuevo.innerHTML;
+
                 // 🔄 actualizar mapa con nuevos pedidos
-                if (typeof actualizarMarcadoresMapa === 'function') {
-                    actualizarMarcadoresMapa();
-                }
+                actualizarMarcadoresMapa();
+
             }
 
         })
-        .catch(err => console.error('Error refrescando pedidos silenciosamente:', err));
+        .catch(err => console.error('Error refrescando pedidos nuevos:', err));
 
     }, 5000); // ⏱ cada 5 segundos
 
