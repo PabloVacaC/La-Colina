@@ -81,6 +81,10 @@ class Pedido {
   final Cliente? cliente;
   final List<DetallePedido> detalles;
   final List<DetallePedido> ultimaCompra;
+  final Map<int, double> preciosProductos;
+  final bool tieneDescuento;
+  final String? tipoDescuento;
+  final double totalEstimado;
 
   Pedido({
     required this.id,
@@ -95,6 +99,10 @@ class Pedido {
     this.cliente,
     required this.detalles,
     this.ultimaCompra = const [],
+    this.preciosProductos = const {},
+    this.tieneDescuento = false,
+    this.tipoDescuento,
+    this.totalEstimado = 0.0,
   });
 
   factory Pedido.fromJson(Map<String, dynamic> json) {
@@ -103,6 +111,17 @@ class Pedido {
 
     var rawUltimaCompra = json['ultima_compra'] as List? ?? [];
     List<DetallePedido> ultimaCompraList = rawUltimaCompra.map((d) => DetallePedido.fromJson(d)).toList();
+
+    Map<int, double> preciosMap = {};
+    if (json['precios_productos'] != null && json['precios_productos'] is Map) {
+      (json['precios_productos'] as Map).forEach((k, v) {
+        final intId = int.tryParse(k.toString());
+        final doublePrice = double.tryParse(v.toString());
+        if (intId != null && doublePrice != null) {
+          preciosMap[intId] = doublePrice;
+        }
+      });
+    }
 
     return Pedido(
       id: json['id'] ?? 0,
@@ -117,6 +136,11 @@ class Pedido {
       cliente: json['cliente'] != null ? Cliente.fromJson(json['cliente']) : null,
       detalles: detallesList,
       ultimaCompra: ultimaCompraList,
+      preciosProductos: preciosMap,
+      tieneDescuento: json['tiene_descuento'] == true,
+      tipoDescuento: json['tipo_descuento'],
+      totalEstimado: json['total_estimado'] != null ? double.parse(json['total_estimado'].toString()) : 0.0,
     );
   }
 }
+

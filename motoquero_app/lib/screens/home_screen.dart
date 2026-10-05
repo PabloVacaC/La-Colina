@@ -39,6 +39,7 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
   // Ruta seleccionada actualmente (A, B, C, D)
   String _rutaSeleccionada = 'A';
   String _filtroRutaEntregados = 'TODAS';
+  final String _telefonoEmpresa = '59163524474';
 
   // Rutas expandidas en la pestaña 1
   final Set<String> _rutasExpandidas = {'A'};
@@ -983,14 +984,50 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
                             ),
                           ),
                           const SizedBox(width: 8),
-                          Text(
-                            'Bs. ${pedido.totalPrecio.toStringAsFixed(2)}',
-                            style: const TextStyle(
-                              fontSize: 20,
-                              fontWeight: FontWeight.w900,
-                              color: Color(0xFF00C853),
+                          if (pedido.tieneDescuento)
+                            Column(
+                              crossAxisAlignment: CrossAxisAlignment.end,
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Text(
+                                  'Bs. ${pedido.totalPrecio.toStringAsFixed(2)}',
+                                  style: const TextStyle(
+                                    fontSize: 20,
+                                    fontWeight: FontWeight.w900,
+                                    color: Color(0xFF00C853),
+                                  ),
+                                ),
+                                Container(
+                                  margin: const EdgeInsets.only(top: 2),
+                                  padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                                  decoration: BoxDecoration(
+                                    color: const Color(0xFFE8F5E9),
+                                    borderRadius: BorderRadius.circular(4),
+                                    border: Border.all(color: const Color(0xFF81C784)),
+                                  ),
+                                  child: Row(
+                                    mainAxisSize: MainAxisSize.min,
+                                    children: [
+                                      const Icon(Icons.local_offer, size: 10, color: Color(0xFF2E7D32)),
+                                      const SizedBox(width: 3),
+                                      Text(
+                                        pedido.tipoDescuento ?? 'Con Descuento',
+                                        style: const TextStyle(fontSize: 10, fontWeight: FontWeight.bold, color: Color(0xFF2E7D32)),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                              ],
+                            )
+                          else
+                            Text(
+                              'Bs. ${pedido.totalPrecio.toStringAsFixed(2)}',
+                              style: const TextStyle(
+                                fontSize: 20,
+                                fontWeight: FontWeight.w900,
+                                color: Color(0xFF00C853),
+                              ),
                             ),
-                          ),
                         ],
                       ),
                       const SizedBox(height: 12),
@@ -1018,7 +1055,7 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
                       ),
                       const SizedBox(height: 14),
 
-                      // Fila de 2 botones: MAPA GPS y LLAMAR
+                      // Fila de 2 botones: MAPA GPS y WHATSAPP
                       Row(
                         children: [
                           Expanded(
@@ -1054,6 +1091,31 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
                             ),
                           ),
                         ],
+                      ),
+                      const SizedBox(height: 8),
+
+                      // Botón: CHAT GENERAL / CENTRAL (Comunicación directa con el WhatsApp de la Empresa)
+                      SizedBox(
+                        width: double.infinity,
+                        child: ElevatedButton.icon(
+                          onPressed: () => _abrirChatGeneral(c, pedido),
+                          icon: const Icon(Icons.headset_mic, size: 16, color: Colors.white),
+                          label: const Text(
+                            'CHAT CENTRAL',
+                            style: TextStyle(
+                              color: Colors.white,
+                              fontWeight: FontWeight.bold,
+                              fontSize: 13,
+                              letterSpacing: 0.4,
+                            ),
+                          ),
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: const Color(0xFF00838F), // Cyan / Teal oscuro
+                            padding: const EdgeInsets.symmetric(vertical: 11),
+                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+                            elevation: 1,
+                          ),
+                        ),
                       ),
                       const SizedBox(height: 14),
 
@@ -1410,6 +1472,54 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
         );
       }
       await _llamarCliente(cliente?.celular);
+    }
+  }
+
+  Future<void> _abrirChatGeneral(Cliente? cliente, Pedido? pedido) async {
+    final cleanPhone = _telefonoEmpresa.replaceAll(RegExp(r'[^0-9]'), '');
+    if (cleanPhone.isEmpty) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('⚠️ No se ha configurado el número de la Central de la empresa.'),
+            backgroundColor: Colors.orange,
+          ),
+        );
+      }
+      return;
+    }
+
+    final nombreMotoquero = widget.session.motoquero.nombreCompleto.trim();
+    final nombreCliente = cliente?.nombre ?? 'Cliente';
+    final codPedido = (pedido != null && pedido.id > 0) ? '#${pedido.id}' : '';
+    final dir = cliente?.direccion ?? '';
+
+    final mensaje = "👋 Hola Central, soy $nombreMotoquero.\n\n"
+        "🚚 *Consulta sobre entrega actual:*\n"
+        "• Pedido: $codPedido\n"
+        "• Cliente: $nombreCliente\n"
+        "${dir.isNotEmpty ? '• Dirección: $dir\n' : ''}\n"
+        "Mensaje: ";
+
+    final uri = Uri.parse('https://wa.me/$cleanPhone?text=${Uri.encodeComponent(mensaje)}');
+
+    try {
+      final ok = await launchUrl(uri, mode: LaunchMode.externalApplication);
+      if (!ok) {
+        final okFallback = await launchUrl(uri, mode: LaunchMode.platformDefault);
+        if (!okFallback) {
+          throw Exception('No se pudo abrir WhatsApp');
+        }
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('No se pudo abrir WhatsApp de la empresa: $e'),
+            backgroundColor: Colors.redAccent,
+          ),
+        );
+      }
     }
   }
 
@@ -2832,6 +2942,14 @@ class _DialogoFinalizarEntregaState extends State<_DialogoFinalizarEntrega> {
   String _metodoPago = '';
   bool _esUltimaCompra = false;
 
+  /// Obtiene el precio real con descuento o precio especial configurado para este cliente
+  double _obtenerPrecioCliente(ProductoItem prod) {
+    if (widget.pedido.preciosProductos.containsKey(prod.id)) {
+      return widget.pedido.preciosProductos[prod.id]!;
+    }
+    return prod.precio;
+  }
+
   @override
   void initState() {
     super.initState();
@@ -2891,7 +3009,7 @@ class _DialogoFinalizarEntregaState extends State<_DialogoFinalizarEntrega> {
       }
     }
 
-    // Inicializar filas con los items determinados
+    // Inicializar filas con los items determinados y aplicar el precio con descuento del cliente
     if (itemsACargar.isNotEmpty) {
       for (final det in itemsACargar) {
         ProductoItem? prodMatch;
@@ -2903,20 +3021,25 @@ class _DialogoFinalizarEntregaState extends State<_DialogoFinalizarEntrega> {
         }
         prodMatch ??= _catalogo.first;
 
+        final double precioUnit = widget.pedido.preciosProductos.containsKey(prodMatch.id)
+            ? widget.pedido.preciosProductos[prodMatch.id]!
+            : (det.precioUnitario > 0 ? det.precioUnitario : _obtenerPrecioCliente(prodMatch));
+
         _filas.add(_FilaProductoItem(
           producto: prodMatch,
-          precioUnitario: det.precioUnitario > 0 ? det.precioUnitario : prodMatch.precio,
+          precioUnitario: precioUnit,
           cantidad: det.cantidad > 0 ? det.cantidad : 1,
         ));
       }
     }
 
-    // 4. Si es CLIENTE NUEVO (sin compras anteriores ni detalles), poner por defecto el primer producto con cantidad = 1
+    // 4. Si es CLIENTE NUEVO (sin compras anteriores ni detalles), poner por defecto el primer producto con cantidad = 1 y precio con descuento
     if (_filas.isEmpty && _catalogo.isNotEmpty) {
       final primerProd = _catalogo.first;
+      final double precioUnit = _obtenerPrecioCliente(primerProd);
       _filas.add(_FilaProductoItem(
         producto: primerProd,
-        precioUnitario: primerProd.precio,
+        precioUnitario: precioUnit,
         cantidad: 1,
       ));
     }
@@ -3008,6 +3131,36 @@ class _DialogoFinalizarEntregaState extends State<_DialogoFinalizarEntrega> {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
+                    // Aviso informativo: Descuento / Precio especial del cliente
+                    if (widget.pedido.tieneDescuento) ...[
+                      Container(
+                        width: double.infinity,
+                        margin: const EdgeInsets.only(bottom: 12),
+                        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
+                        decoration: BoxDecoration(
+                          color: const Color(0xFFFFF3E0),
+                          borderRadius: BorderRadius.circular(6),
+                          border: Border.all(color: const Color(0xFFFFB74D)),
+                        ),
+                        child: Row(
+                          children: [
+                            const Icon(Icons.local_offer, size: 16, color: Color(0xFFE65100)),
+                            const SizedBox(width: 8),
+                            Expanded(
+                              child: Text(
+                                'Cliente con ${widget.pedido.tipoDescuento ?? 'precio especial con descuento'} aplicado automáticamente.',
+                                style: const TextStyle(
+                                  fontSize: 12,
+                                  fontWeight: FontWeight.bold,
+                                  color: Color(0xFFE65100),
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
+
                     // Aviso informativo: Última compra habitual vs Cliente nuevo
                     if (_esUltimaCompra) ...[
                       Container(
@@ -3173,7 +3326,7 @@ class _DialogoFinalizarEntregaState extends State<_DialogoFinalizarEntrega> {
                                                 final nuevo = _catalogo.firstWhere((p) => p.id == newId);
                                                 setState(() {
                                                   f.producto = nuevo;
-                                                  f.precioUnitario = nuevo.precio;
+                                                  f.precioUnitario = _obtenerPrecioCliente(nuevo);
                                                 });
                                               }
                                             },
@@ -3186,11 +3339,28 @@ class _DialogoFinalizarEntregaState extends State<_DialogoFinalizarEntrega> {
                                     // 2. Precio ref.
                                     SizedBox(
                                       width: 75,
-                                      child: Text(
-                                        '${f.precioUnitario.toStringAsFixed(2)} Bs',
-                                        textAlign: TextAlign.center,
-                                        style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: Color(0xFF6C757D)),
-                                      ),
+                                      child: (widget.pedido.preciosProductos.containsKey(f.producto.id) &&
+                                              widget.pedido.preciosProductos[f.producto.id]! < f.producto.precio)
+                                          ? Column(
+                                              mainAxisAlignment: MainAxisAlignment.center,
+                                              children: [
+                                                Text(
+                                                  '${f.precioUnitario.toStringAsFixed(2)} Bs',
+                                                  textAlign: TextAlign.center,
+                                                  style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: Color(0xFF2E7D32)),
+                                                ),
+                                                Text(
+                                                  '${f.producto.precio.toStringAsFixed(2)} Bs',
+                                                  textAlign: TextAlign.center,
+                                                  style: const TextStyle(fontSize: 10, decoration: TextDecoration.lineThrough, color: Colors.grey),
+                                                ),
+                                              ],
+                                            )
+                                          : Text(
+                                              '${f.precioUnitario.toStringAsFixed(2)} Bs',
+                                              textAlign: TextAlign.center,
+                                              style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: Color(0xFF6C757D)),
+                                            ),
                                     ),
                                     const SizedBox(width: 4),
 
@@ -3331,7 +3501,7 @@ class _DialogoFinalizarEntregaState extends State<_DialogoFinalizarEntrega> {
                         setState(() {
                           _filas.add(_FilaProductoItem(
                             producto: nuevoProd,
-                            precioUnitario: nuevoProd.precio,
+                            precioUnitario: _obtenerPrecioCliente(nuevoProd),
                             cantidad: 1,
                           ));
                         });

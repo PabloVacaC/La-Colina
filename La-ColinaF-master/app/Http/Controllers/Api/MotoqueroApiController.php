@@ -84,8 +84,10 @@ class MotoqueroApiController extends Controller
 
         $hoy = Carbon::today();
 
+        $todosProductos = Producto::all();
+
         // Pedidos Asignados
-        $asignadosRaw = Pedido::with(['cliente', 'detalles'])
+        $asignadosRaw = Pedido::with(['cliente.preciosEspeciales', 'detalles'])
             ->where('motoquero_id', $motoqueroId)
             ->where('estado', 'Asignado')
             ->orderBy('orden', 'asc')
@@ -93,7 +95,7 @@ class MotoqueroApiController extends Controller
             ->get();
 
         // Pedidos En Camino (activos)
-        $enCaminoRaw = Pedido::with(['cliente', 'detalles'])
+        $enCaminoRaw = Pedido::with(['cliente.preciosEspeciales', 'detalles'])
             ->where('motoquero_id', $motoqueroId)
             ->where('estado', 'En camino')
             ->orderBy('orden', 'asc')
@@ -101,7 +103,7 @@ class MotoqueroApiController extends Controller
             ->get();
 
         // Pedidos Entregados de hoy
-        $entregadosRaw = Pedido::with(['cliente', 'detalles'])
+        $entregadosRaw = Pedido::with(['cliente.preciosEspeciales', 'detalles'])
             ->where('motoquero_id', $motoqueroId)
             ->where('estado', 'Entregado')
             ->whereDate('updated_at', $hoy)
@@ -138,7 +140,7 @@ class MotoqueroApiController extends Controller
             }
         }
 
-        $format = fn($p) => $this->formatPedido($p, $ultimasComprasMap->get($p->cliente_id, []));
+        $format = fn($p) => $this->formatPedido($p, $ultimasComprasMap->get($p->cliente_id, []), $todosProductos);
 
         $asignados = $asignadosRaw->map($format);
         $enCamino = $enCaminoRaw->map($format);
@@ -188,7 +190,7 @@ class MotoqueroApiController extends Controller
         return response()->json([
             'success' => true,
             'message' => 'Pedido en atención.',
-            'pedido'  => $this->formatPedido($pedido->fresh(['cliente', 'detalles'])),
+            'pedido'  => $this->formatPedido($pedido->fresh(['cliente.preciosEspeciales', 'detalles'])),
         ]);
     }
 
@@ -344,7 +346,7 @@ class MotoqueroApiController extends Controller
             return response()->json([
                 'success' => true,
                 'message' => '¡Pedido entregado con éxito!',
-                'pedido'  => $this->formatPedido($pedido->fresh(['cliente', 'detalles'])),
+                'pedido'  => $this->formatPedido($pedido->fresh(['cliente.preciosEspeciales', 'detalles'])),
             ]);
 
         } catch (\Exception $e) {
@@ -495,18 +497,52 @@ class MotoqueroApiController extends Controller
     }
 
     /**
-     * Formateador auxiliar para pedidos
+     * Formateador auxiliar para pedidos con soporte completo de descuentos y precios especiales
      */
-    private function formatPedido(Pedido $p, ?array $ultimaCompra = null): array
+    private function formatPedido(Pedido $p, ?array $ultimaCompra = null, $todosProductos = null): array
     {
         $cliente = $p->cliente;
+        if ($todosProductos === null) {
+            $todosProductos = Producto::all();
+        }
 
         $imagenCasaUrl = null;
         if ($cliente && $cliente->imagen_casa) {
             $imagenCasaUrl = asset('storage/' . $cliente->imagen_casa);
         }
 
-        // Si no se proporcionó $ultimaCompra pero el pedido tiene cliente, buscarla
+        // 1. Mapeo de precios con descuento / precios especiales para este cliente
+        $preciosProductos = [];
+        $tieneDescuento = false;
+        $tipoDescuento = null;
+
+        if ($cliente) {
+            $promoActiva = $cliente->promoVigente();
+            $preciosEsp = $cliente->preciosEspeciales;
+
+            if ($promoActiva) {
+                $tieneDescuento = true;
+                $tipoDescuento = 'Promoción activa';
+            } elseif ($preciosEsp && $preciosEsp->isNotEmpty()) {
+                $tieneDescuento = true;
+                $tipoDescuento = 'Precio especial';
+            }
+
+            foreach ($todosProductos as $prod) {
+                $precioEfectivo = (float) $cliente->getPrecioProducto($prod);
+                $preciosProductos[(int)$prod->id] = $precioEfectivo;
+                if (!$tieneDescuento && $precioEfectivo < (float)$prod->precio) {
+                    $tieneDescuento = true;
+                    $tipoDescuento = 'Descuento cliente';
+                }
+            }
+        } else {
+            foreach ($todosProductos as $prod) {
+                $preciosProductos[(int)$prod->id] = (float) $prod->precio;
+            }
+        }
+
+        // 2. Si no se proporcionó $ultimaCompra pero el pedido tiene cliente, buscarla
         if ($ultimaCompra === null && $p->cliente_id) {
             $ultimo = Pedido::with('detalles')
                 ->where('cliente_id', $p->cliente_id)
@@ -531,10 +567,60 @@ class MotoqueroApiController extends Controller
             }
         }
 
+        // 3. Ajustar última compra con precios con descuento vigentes del cliente
+        $ultimaCompraConDescuento = [];
+        if (!empty($ultimaCompra)) {
+            foreach ($ultimaCompra as $uc) {
+                $nombreProd = trim($uc['producto'] ?? '');
+                $prodMatch = $todosProductos->first(function ($pr) use ($nombreProd) {
+                    return strcasecmp(trim($pr->nombre), $nombreProd) === 0;
+                });
+                $precioUnit = ($prodMatch && isset($preciosProductos[$prodMatch->id]))
+                    ? $preciosProductos[$prodMatch->id]
+                    : (float) ($uc['precio_unitario'] ?? 0);
+                $cant = (int) ($uc['cantidad'] ?? 1);
+                $ultimaCompraConDescuento[] = [
+                    'id'              => $uc['id'] ?? null,
+                    'producto'        => $uc['producto'],
+                    'detalle'         => $uc['detalle'] ?? '',
+                    'cantidad'        => $cant,
+                    'precio_unitario' => $precioUnit,
+                    'precio_total'    => (float) ($precioUnit * $cant),
+                ];
+            }
+        }
+
+        // 4. Estimación del total para pedidos nuevos/asignados sin detalle aún
+        $totalEstimado = 0.0;
+        if ($p->detalles->isNotEmpty()) {
+            $totalEstimado = (float) $p->detalles->sum('precio_total');
+        } elseif (!empty($ultimaCompraConDescuento)) {
+            foreach ($ultimaCompraConDescuento as $item) {
+                $totalEstimado += (float) ($item['precio_total'] ?? 0);
+            }
+        } else {
+            // Cliente nuevo sin compra previa: estimar con 1 botellón de agua regular (o primer producto)
+            $primerProd = $todosProductos->first();
+            if ($primerProd) {
+                $totalEstimado = isset($preciosProductos[$primerProd->id])
+                    ? $preciosProductos[$primerProd->id]
+                    : (float) $primerProd->precio;
+            }
+        }
+
+        $totalPrecioFinal = (float) $p->total_precio;
+        if ($totalPrecioFinal <= 0 && $p->estado !== 'Entregado') {
+            $totalPrecioFinal = $totalEstimado;
+        }
+
         return [
             'id'                            => $p->id,
             'estado'                        => $p->estado,
-            'total_precio'                  => (float) $p->total_precio,
+            'total_precio'                  => $totalPrecioFinal,
+            'total_estimado'                => $totalEstimado,
+            'tiene_descuento'               => $tieneDescuento,
+            'tipo_descuento'                => $tipoDescuento,
+            'precios_productos'             => $preciosProductos,
             'metodo_pago'                   => $p->metodo_pago,
             'qr_pago_estado'                => $p->qr_pago_estado,
             'orden'                         => $p->orden,
@@ -564,7 +650,7 @@ class MotoqueroApiController extends Controller
                     'precio_total'    => (float) $d->precio_total,
                 ];
             }),
-            'ultima_compra'                 => $ultimaCompra ?? [],
+            'ultima_compra'                 => !empty($ultimaCompraConDescuento) ? $ultimaCompraConDescuento : ($ultimaCompra ?? []),
         ];
     }
 
