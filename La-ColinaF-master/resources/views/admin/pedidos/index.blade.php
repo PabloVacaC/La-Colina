@@ -20,6 +20,18 @@
 
 @section('content')
 
+<style>
+/* 🚫 EVITAR PANTALLAS BLANCAS O PRELOADER EN CUALQUIER RECARGA O NAVEGACIÓN */
+.preloader, .animation__shake, .preloader img {
+    display: none !important;
+    opacity: 0 !important;
+    visibility: hidden !important;
+    pointer-events: none !important;
+    height: 0 !important;
+    width: 0 !important;
+}
+</style>
+
 <meta name="csrf-token" content="{{ csrf_token() }}">
 
 <div class="container-fluid">
@@ -38,6 +50,9 @@
                             <i class="fas fa-satellite-dish"></i> GPS en Vivo (cada 4s)
                         </span>
                         <span class="badge badge-secondary px-2 py-1" id="badgeHoraGps">--:--:--</span>
+                        <span class="badge badge-primary px-2 py-1" id="badgePedidosLive" title="Actualización automática de pedidos sin recargar pantalla">
+                            <i class="fas fa-bolt text-warning"></i> Pedidos en Vivo (Auto)
+                        </span>
                     </div>
 
                     {{-- Distribuidores y Leyenda Interactiva (4 colores distintos) --}}
@@ -2451,118 +2466,57 @@ document.addEventListener('click', function (e) {
 </script>
 
 
-<script>
-function refrescarPanelMotoquero(motoqueroId) {
-
-    const panel = document.getElementById('panel-motoquero-' + motoqueroId);
-    if (!panel) {
-        console.warn('Panel no encontrado para motoquero:', motoqueroId);
-        return;
-    }
-
-    // 🔑 conservar fecha actual
-    const params = new URLSearchParams(window.location.search);
-    const fecha = params.get('fecha') || '';
-
-    const url = fecha
-        ? window.location.pathname + '?fecha=' + fecha
-        : window.location.pathname;
-
-    fetch(url, {
-        method: 'GET',
-        credentials: 'same-origin', // 🔥 CLAVE
-        cache: 'no-store',          // 🔥 CLAVE
-        headers: {
-            'X-Requested-With': 'XMLHttpRequest'
-        }
-    })
-    .then(res => res.text())
-    .then(html => {
-
-        const temp = document.createElement('div');
-        temp.innerHTML = html;
-
-        const nuevoPanel = temp.querySelector('#panel-motoquero-' + motoqueroId);
-        if (!nuevoPanel) {
-            console.error('No se encontró el panel en la respuesta HTML');
-            return;
-        }
-
-        panel.innerHTML = nuevoPanel.innerHTML;
-        console.log('Panel actualizado correctamente:', motoqueroId);
-    })
-    .catch(err => {
-        console.error('Error al refrescar panel:', err);
-    });
-}
-</script>
-
-
 <script src="https://cdn.jsdelivr.net/npm/sortablejs@1.15.0/Sortable.min.js"></script>
 
 <script>
-document.addEventListener('DOMContentLoaded', function() {
+// ==========================================================
+// 🔄 ACTUALIZACIÓN SILENCIOSA DE PEDIDOS Y ESTADOS EN VIVO
+// (Sin recargar la página, sin parpadeos, sin pantalla blanca)
+// ==========================================================
+let actualizandoPedidosEnVivo = false;
+let pollingPedidosEnVivoInterval = null;
 
-    document.querySelectorAll('.lista-por-asignar, .lista-asignado').forEach(function(el){
+function inicializarSortables(contexto) {
+    const root = contexto || document;
+    root.querySelectorAll('.lista-por-asignar, .lista-asignado').forEach(function(el) {
+        if (el.querySelectorAll('.pedido-item').length === 0) return;
 
-        // 🛑 No inicializar si no hay pedidos
-        if (el.querySelectorAll('.pedido-item').length === 0) {
-            return;
+        if (el._sortableInstance) {
+            try { el._sortableInstance.destroy(); } catch(e) {}
         }
 
-        new Sortable(el, {
-
-            // ✅ SOLO se pueden arrastrar pedidos
+        el._sortableInstance = new Sortable(el, {
             draggable: '.pedido-item',
-
             group: {
                 name: 'solo-orden-' + (el.dataset.motoquero || '') + '-' + (el.dataset.ruta || ''),
                 pull: false,
                 put: false
             },
-
             animation: 150,
             ghostClass: 'dragging',
-
-            // 📱 Mejor comportamiento en celular
             delay: 200,
             delayOnTouchOnly: true,
             touchStartThreshold: 6,
-
             onMove: function (evt) {
-
-                // 🔥 Si intenta moverse a otra lista → cancelar
-                if (evt.from !== evt.to) {
-                    return false;
-                }
-
+                if (evt.from !== evt.to) return false;
             },
-
-            onEnd: function(evt){
-
-                // 🛑 Ignorar si no es pedido
-                if (!evt.item.classList.contains('pedido-item')) {
-                    return;
-                }
-
-                // 🛑 Seguridad extra
+            onEnd: function(evt) {
+                if (!evt.item.classList.contains('pedido-item')) return;
                 if (evt.from !== evt.to) {
                     evt.from.insertBefore(evt.item, evt.from.children[evt.oldIndex]);
                     return;
                 }
 
                 let lista = evt.to;
-
-                lista.querySelectorAll('.pedido-item').forEach((item,index)=>{
+                lista.querySelectorAll('.pedido-item').forEach((item, index) => {
                     const numero = item.querySelector('b');
-                    if(numero){
+                    if (numero) {
                         numero.textContent = '#' + (index + 1);
                     }
                 });
 
                 let orden = [];
-
-                lista.querySelectorAll('.pedido-item').forEach((item,index)=>{
+                lista.querySelectorAll('.pedido-item').forEach((item, index) => {
                     orden.push({
                         id: item.dataset.id,
                         posicion: index + 1
@@ -2575,27 +2529,139 @@ document.addEventListener('DOMContentLoaded', function() {
                         'Content-Type': 'application/json',
                         'X-CSRF-TOKEN': document.querySelector('meta[name="csrf-token"]').content
                     },
-                    body: JSON.stringify({orden: orden})
+                    body: JSON.stringify({ orden: orden })
                 });
 
                 actualizarBotonEmergencia();
 
                 const motoqueroId = lista.dataset.motoquero;
                 const ruta = lista.dataset.ruta;
-
                 if (mapas[motoqueroId]) {
                     cargarMapaPorAsignar(motoqueroId, ruta);
                 }
+            }
+        });
+    });
+}
 
+function refrescarPedidosEnVivo() {
+    // Si la pestaña no está activa o ya hay una consulta en curso, esperar
+    if (document.hidden || actualizandoPedidosEnVivo) return;
+
+    // Si hay un modal abierto o una alerta Swal interactiva, no interrumpir al usuario
+    if (document.querySelector('.modal.show') || (typeof Swal !== 'undefined' && Swal.isVisible && Swal.isVisible())) {
+        return;
+    }
+
+    // Si el usuario está escribiendo activamente en un campo de texto o buscando cliente
+    const activeEl = document.activeElement;
+    if (activeEl && (activeEl.tagName === 'INPUT' || activeEl.tagName === 'SELECT' || activeEl.tagName === 'TEXTAREA')) {
+        if (activeEl.id === 'buscadorCliente' && activeEl.value.trim().length > 0) return;
+        if (activeEl.closest('#modalEditarPedido') || activeEl.closest('.form-control')) return;
+    }
+
+    actualizandoPedidosEnVivo = true;
+
+    const url = window.location.href;
+
+    fetch(url, {
+        method: 'GET',
+        credentials: 'same-origin',
+        cache: 'no-store',
+        headers: {
+            'X-Requested-With': 'XMLHttpRequest'
+        }
+    })
+    .then(res => res.text())
+    .then(html => {
+        const parser = new DOMParser();
+        const doc = parser.parseFromString(html, 'text/html');
+
+        // 1. Actualizar cada panel de Distribuidor preservando la ruta que el usuario estaba viendo
+        const panelesNuevos = doc.querySelectorAll('[id^="panel-motoquero-"]');
+        panelesNuevos.forEach(nuevoPanel => {
+            const id = nuevoPanel.id;
+            const actualPanel = document.getElementById(id);
+            if (!actualPanel) return;
+
+            const rutaActiva = actualPanel.querySelector('.btn-ruta.active')?.dataset?.ruta;
+            if (rutaActiva) {
+                nuevoPanel.querySelectorAll('.btn-ruta').forEach(b => {
+                    b.classList.toggle('active', b.dataset.ruta === rutaActiva);
+                });
+                nuevoPanel.querySelectorAll('.ruta').forEach(r => {
+                    r.classList.toggle('active', r.dataset.ruta === rutaActiva);
+                });
             }
 
+            if (actualPanel.innerHTML.trim() !== nuevoPanel.innerHTML.trim()) {
+                actualPanel.innerHTML = nuevoPanel.innerHTML;
+                inicializarSortables(actualPanel);
+                actualizarBotonEmergencia();
+            }
         });
 
-    });
+        // 2. Actualizar Tabla General de Pedidos y refrescar pines en el Mapa General
+        const nuevaTablaBody = doc.querySelector('#example1 tbody');
+        const actualTablaBody = document.querySelector('#example1 tbody');
+        if (nuevaTablaBody && actualTablaBody) {
+            if (actualTablaBody.innerHTML.trim() !== nuevaTablaBody.innerHTML.trim()) {
+                actualTablaBody.innerHTML = nuevaTablaBody.innerHTML;
+                if (typeof cargarPedidosEnMapaGeneral === 'function') {
+                    cargarPedidosEnMapaGeneral();
+                }
+            }
+        }
 
+        // 3. Actualizar contador de pedidos en cabecera
+        const nuevoContador = doc.querySelector('.col-md-10 .card-header small.text-muted');
+        const actualContador = document.querySelector('.col-md-10 .card-header small.text-muted');
+        if (nuevoContador && actualContador && actualContador.innerHTML !== nuevoContador.innerHTML) {
+            actualContador.innerHTML = nuevoContador.innerHTML;
+        }
+
+        // 4. Actualizar columna de contactos WhatsApp que escribieron hoy
+        const nuevaColumnaWhatsapp = doc.querySelector('.col-md-2 .card-body');
+        const actualColumnaWhatsapp = document.querySelector('.col-md-2 .card-body');
+        if (nuevaColumnaWhatsapp && actualColumnaWhatsapp) {
+            if (actualColumnaWhatsapp.innerHTML.trim() !== nuevaColumnaWhatsapp.innerHTML.trim()) {
+                actualColumnaWhatsapp.innerHTML = nuevaColumnaWhatsapp.innerHTML;
+            }
+        }
+
+        // 5. Actualizar badge de estado en el header
+        const badgeLive = document.getElementById('badgePedidosLive');
+        if (badgeLive) {
+            const now = new Date();
+            const timeStr = now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+            badgeLive.innerHTML = `<i class="fas fa-check-circle text-white"></i> Pedidos en Vivo (${timeStr})`;
+            badgeLive.className = 'badge badge-success px-2 py-1';
+        }
+    })
+    .catch(err => {
+        console.warn('Auto-refresco silencioso de pedidos:', err);
+    })
+    .finally(() => {
+        actualizandoPedidosEnVivo = false;
+    });
+}
+
+// Función compatible por si algún botón viejo llama a refrescarPanelMotoquero
+function refrescarPanelMotoquero(motoqueroId) {
+    refrescarPedidosEnVivo();
+}
+
+window.refrescarPedidosEnVivo = refrescarPedidosEnVivo;
+
+document.addEventListener('DOMContentLoaded', function() {
+    inicializarSortables();
     actualizarBotonEmergencia();
 
+    // Iniciar refresco en tiempo real cada 6 segundos silenciosamente
+    if (pollingPedidosEnVivoInterval) clearInterval(pollingPedidosEnVivoInterval);
+    pollingPedidosEnVivoInterval = setInterval(refrescarPedidosEnVivo, 6000);
 });
+</script>
 
 
 

@@ -1519,9 +1519,8 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
         "🚚 *Consulta sobre entrega actual:*\n"
         "• Pedido: $codPedido\n"
         "• Cliente: $nombreCliente\n"
-        "• Celular: $celFormatted\n"
-        "${dir.isNotEmpty ? '• Dirección: $dir\n' : ''}\n"
-        "Mensaje: ";
+        "• Celular: $celFormatted"
+        "${dir.isNotEmpty ? '\n• Dirección: $dir' : ''}";
 
     final uri = Uri.parse('https://wa.me/$cleanPhone?text=${Uri.encodeComponent(mensaje)}');
 
