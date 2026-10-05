@@ -8,18 +8,23 @@ echo "=========================================="
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
 
-# 1. Unir partes del archivo de imagenes
-echo "1. Uniendo partes del archivo de imagenes..."
-cat la_colinaf_imagenes_2026-10-05.tar.gz.part_* > la_colinaf_imagenes_2026-10-05.tar.gz
+# 1. Unir partes del archivo de imagenes si no esta unido
+if [ ! -f la_colinaf_imagenes_2026-10-05.tar.gz ]; then
+    echo "1. Uniendo partes del archivo de imagenes..."
+    cat la_colinaf_imagenes_2026-10-05.tar.gz.part_* > la_colinaf_imagenes_2026-10-05.tar.gz
+else
+    echo "1. El archivo de imagenes ya esta unido."
+fi
 
-# 2. Descomprimir imagenes en el proyecto
-echo "2. Descomprimiendo imagenes de clientes..."
-tar -zxvf la_colinaf_imagenes_2026-10-05.tar.gz -C La-ColinaF-master/
+# 2. Descomprimir imagenes en el proyecto con permisos de superusuario
+echo "2. Descomprimiendo imagenes de clientes con sudo..."
+sudo mkdir -p La-ColinaF-master/storage/app/public/clientes
+sudo tar --no-same-owner -zxvf la_colinaf_imagenes_2026-10-05.tar.gz -C La-ColinaF-master/
 
 # 3. Asignar permisos correctos
 echo "3. Asignando permisos a las imagenes..."
-sudo chown -R www-data:www-data La-ColinaF-master/storage/app/public/clientes 2>/dev/null || chown -R www-data:www-data La-ColinaF-master/storage/app/public/clientes 2>/dev/null || true
-sudo chmod -R 775 La-ColinaF-master/storage/app/public/clientes 2>/dev/null || chmod -R 775 La-ColinaF-master/storage/app/public/clientes 2>/dev/null || true
+sudo chown -R www-data:www-data La-ColinaF-master/storage/app/public
+sudo chmod -R 775 La-ColinaF-master/storage/app/public
 
 # 4. Importar base de datos a Docker MySQL
 echo "4. Importando base de datos a MySQL en Docker..."
