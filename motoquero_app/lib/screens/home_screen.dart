@@ -1195,6 +1195,9 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
                       ),
                       const SizedBox(height: 14),
 
+                      // Sección: Última compra habitual del cliente con precios referenciales y descuentos
+                      _construirSeccionUltimaCompra(pedido),
+
                       // Si ya fue entregado: mostrar resumen informativo del pago
                       if (esEntregado) ...[
                         Container(
@@ -1491,13 +1494,32 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
 
     final nombreMotoquero = widget.session.motoquero.nombreCompleto.trim();
     final nombreCliente = cliente?.nombre ?? 'Cliente';
-    final codPedido = (pedido != null && pedido.id > 0) ? '#${pedido.id}' : '';
+
+    // Número de pedido de ese día (orden de entrega de hoy)
+    final codPedido = (pedido != null && pedido.orden > 0)
+        ? '#${pedido.orden}'
+        : ((pedido != null && pedido.id > 0) ? '#${pedido.id}' : '');
+
+    // Formatear celular del cliente
+    String celFormatted = (cliente?.celular ?? '').trim();
+    if (celFormatted.isNotEmpty) {
+      final cleanDigits = celFormatted.replaceAll(RegExp(r'[^0-9]'), '');
+      if (cleanDigits.length == 8) {
+        celFormatted = '+591$cleanDigits';
+      } else if (!celFormatted.startsWith('+') && cleanDigits.length > 8) {
+        celFormatted = '+$cleanDigits';
+      }
+    } else {
+      celFormatted = 'No registrado';
+    }
+
     final dir = cliente?.direccion ?? '';
 
     final mensaje = "👋 Hola Central, soy $nombreMotoquero.\n\n"
         "🚚 *Consulta sobre entrega actual:*\n"
         "• Pedido: $codPedido\n"
         "• Cliente: $nombreCliente\n"
+        "• Celular: $celFormatted\n"
         "${dir.isNotEmpty ? '• Dirección: $dir\n' : ''}\n"
         "Mensaje: ";
 
@@ -1521,6 +1543,218 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
         );
       }
     }
+  }
+
+  Widget _construirSeccionUltimaCompra(Pedido pedido) {
+    final List<DetallePedido> items = pedido.detalles.isNotEmpty
+        ? pedido.detalles
+        : pedido.ultimaCompra;
+
+    final prodsDisponibles = _api.productosDisponibles.isNotEmpty
+        ? _api.productosDisponibles
+        : [
+            ProductoItem(id: 1, nombre: 'Agua Regular', precio: 16.0),
+            ProductoItem(id: 2, nombre: 'Agua Alcalina', precio: 23.0),
+            ProductoItem(id: 3, nombre: 'Botellón + Agua Regular', precio: 50.0),
+            ProductoItem(id: 4, nombre: 'Botellón + Agua Alcalina', precio: 60.0),
+            ProductoItem(id: 5, nombre: 'Dispensador de Mesa', precio: 45.0),
+            ProductoItem(id: 6, nombre: 'Bombita manual', precio: 45.0),
+          ];
+
+    return Container(
+      width: double.infinity,
+      margin: const EdgeInsets.only(bottom: 14),
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: const Color(0xFFF1F8E9),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: const Color(0xFFC5E1A5)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Row(
+                children: const [
+                  Icon(Icons.history, size: 16, color: Color(0xFF2E7D32)),
+                  SizedBox(width: 6),
+                  Text(
+                    'ÚLTIMA COMPRA / HABITUAL:',
+                    style: TextStyle(
+                      fontWeight: FontWeight.bold,
+                      fontSize: 12,
+                      color: Color(0xFF2E7D32),
+                      letterSpacing: 0.3,
+                    ),
+                  ),
+                ],
+              ),
+              if (pedido.tieneDescuento)
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                  decoration: BoxDecoration(
+                    color: Colors.white,
+                    borderRadius: BorderRadius.circular(4),
+                    border: Border.all(color: const Color(0xFF81C784)),
+                  ),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      const Icon(Icons.local_offer, size: 10, color: Color(0xFF2E7D32)),
+                      const SizedBox(width: 3),
+                      Text(
+                        pedido.tipoDescuento ?? 'Promo',
+                        style: const TextStyle(
+                          fontSize: 10,
+                          fontWeight: FontWeight.bold,
+                          color: Color(0xFF2E7D32),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+            ],
+          ),
+          const SizedBox(height: 8),
+
+          if (items.isNotEmpty) ...[
+            ...items.map((item) {
+              ProductoItem? prodMatch;
+              for (final p in prodsDisponibles) {
+                if (p.nombre.toLowerCase().trim() == item.producto.toLowerCase().trim()) {
+                  prodMatch = p;
+                  break;
+                }
+              }
+
+              final bool tienePrecioEspecial = prodMatch != null &&
+                  pedido.preciosProductos.containsKey(prodMatch.id) &&
+                  pedido.preciosProductos[prodMatch.id]! < prodMatch.precio;
+
+              final double precioEfectivo = (prodMatch != null && pedido.preciosProductos.containsKey(prodMatch.id))
+                  ? pedido.preciosProductos[prodMatch.id]!
+                  : (item.precioUnitario > 0 ? item.precioUnitario : 16.0);
+
+              return Padding(
+                padding: const EdgeInsets.symmetric(vertical: 3),
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    Expanded(
+                      child: Text(
+                        '• ${item.cantidad}x ${item.producto}',
+                        style: const TextStyle(
+                          fontSize: 13,
+                          fontWeight: FontWeight.w600,
+                          color: Colors.black87,
+                        ),
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    if (tienePrecioEspecial)
+                      Column(
+                        crossAxisAlignment: CrossAxisAlignment.end,
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Text(
+                            'Bs. ${precioEfectivo.toStringAsFixed(2)}',
+                            style: const TextStyle(
+                              fontSize: 13,
+                              fontWeight: FontWeight.bold,
+                              color: Color(0xFF2E7D32),
+                            ),
+                          ),
+                          Text(
+                            'Bs. ${prodMatch.precio.toStringAsFixed(2)}',
+                            style: const TextStyle(
+                              fontSize: 10,
+                              decoration: TextDecoration.lineThrough,
+                              color: Colors.grey,
+                            ),
+                          ),
+                        ],
+                      )
+                    else
+                      Text(
+                        'Bs. ${precioEfectivo.toStringAsFixed(2)}',
+                        style: const TextStyle(
+                          fontSize: 13,
+                          fontWeight: FontWeight.w600,
+                          color: Color(0xFF424242),
+                        ),
+                      ),
+                  ],
+                ),
+              );
+            }),
+          ] else ...[
+            Builder(builder: (ctx) {
+              final primerProd = prodsDisponibles.first;
+              final bool tienePrecioEspecial = pedido.preciosProductos.containsKey(primerProd.id) &&
+                  pedido.preciosProductos[primerProd.id]! < primerProd.precio;
+              final double precioEfectivo = pedido.preciosProductos.containsKey(primerProd.id)
+                  ? pedido.preciosProductos[primerProd.id]!
+                  : primerProd.precio;
+
+              return Padding(
+                padding: const EdgeInsets.symmetric(vertical: 3),
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    Expanded(
+                      child: Text(
+                        '• 1x ${primerProd.nombre} (Cliente nuevo)',
+                        style: TextStyle(
+                          fontSize: 12,
+                          fontStyle: FontStyle.italic,
+                          color: Colors.grey.shade800,
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    if (tienePrecioEspecial)
+                      Column(
+                        crossAxisAlignment: CrossAxisAlignment.end,
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Text(
+                            'Bs. ${precioEfectivo.toStringAsFixed(2)}',
+                            style: const TextStyle(
+                              fontSize: 13,
+                              fontWeight: FontWeight.bold,
+                              color: Color(0xFF2E7D32),
+                            ),
+                          ),
+                          Text(
+                            'Bs. ${primerProd.precio.toStringAsFixed(2)}',
+                            style: const TextStyle(
+                              fontSize: 10,
+                              decoration: TextDecoration.lineThrough,
+                              color: Colors.grey,
+                            ),
+                          ),
+                        ],
+                      )
+                    else
+                      Text(
+                        'Bs. ${precioEfectivo.toStringAsFixed(2)}',
+                        style: const TextStyle(
+                          fontSize: 13,
+                          fontWeight: FontWeight.w600,
+                          color: Color(0xFF424242),
+                        ),
+                      ),
+                  ],
+                ),
+              );
+            }),
+          ],
+        ],
+      ),
+    );
   }
 
   Future<void> _abrirNavegacionExterna(Cliente? cliente) async {
