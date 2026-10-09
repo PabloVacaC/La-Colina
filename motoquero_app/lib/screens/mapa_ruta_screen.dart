@@ -1,5 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:math' as math;
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_map/flutter_map.dart';
 import 'package:latlong2/latlong.dart';
@@ -36,6 +38,12 @@ class _MapaRutaScreenState extends State<MapaRutaScreen> {
   final ImagePicker _picker = ImagePicker();
 
   LatLng? _posicionMoto;
+  bool _seguirDistribuidor = true; // Centrado automático al desplazarse
+  double _rumboMoto = 0.0; // Rumbo de desplazamiento en grados (0-360°)
+  bool _orientarConRumbo = true; // El mapa se orienta dinámicamente según la dirección de avance
+  LatLng? _posicionAlPausar; // Ubicación donde se pausó el mapa manualmente
+  Timer? _timerAutoReanudarSeguimiento; // Temporizador para auto-reanudar
+  Timer? _timerFallbackGps; // Temporizador de respaldo para actualización continua
   StreamSubscription<Position>? _positionStream;
 
   Pedido? _pedidoActivo;
@@ -69,6 +77,8 @@ class _MapaRutaScreenState extends State<MapaRutaScreen> {
 
   @override
   void dispose() {
+    _timerFallbackGps?.cancel();
+    _timerAutoReanudarSeguimiento?.cancel();
     _positionStream?.cancel();
     super.dispose();
   }
@@ -110,34 +120,131 @@ class _MapaRutaScreenState extends State<MapaRutaScreen> {
     _calcularRutaCalle();
   }
 
-  /// Escucha el GPS de la moto en tiempo real
-  Future<void> _iniciarSeguimientoGps() async {
+  Future<bool> _asegurarPermisosGps() async {
     try {
-      final pos = await Geolocator.getCurrentPosition(
-        locationSettings: const LocationSettings(accuracy: LocationAccuracy.high),
-      );
-      if (mounted) {
-        setState(() {
-          _posicionMoto = LatLng(pos.latitude, pos.longitude);
-        });
-        _calcularRutaCalle();
+      bool serviceEnabled = await Geolocator.isLocationServiceEnabled();
+      if (!serviceEnabled) return false;
+      LocationPermission permission = await Geolocator.checkPermission();
+      if (permission == LocationPermission.denied) {
+        permission = await Geolocator.requestPermission();
+        if (permission == LocationPermission.denied) return false;
+      }
+      if (permission == LocationPermission.deniedForever) return false;
+      return true;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  /// Escucha el GPS de la moto en tiempo real con alta frecuencia y seguimiento
+  Future<void> _iniciarSeguimientoGps() async {
+    await _asegurarPermisosGps();
+
+    // 1. Obtener de inmediato la última ubicación conocida
+    try {
+      final lastPos = await Geolocator.getLastKnownPosition();
+      if (lastPos != null && mounted) {
+        _procesarUbicacionGps(lastPos);
       }
     } catch (_) {}
 
-    _positionStream = Geolocator.getPositionStream(
-      locationSettings: const LocationSettings(
-        accuracy: LocationAccuracy.high,
-        distanceFilter: 10, // cada 10 metros
-      ),
-    ).listen((pos) {
+    // 2. Obtener posición GPS actual precisa
+    try {
+      final pos = await Geolocator.getCurrentPosition(
+        locationSettings: const LocationSettings(
+          accuracy: LocationAccuracy.high,
+          timeLimit: Duration(seconds: 6),
+        ),
+      );
       if (mounted) {
-        final moto = LatLng(pos.latitude, pos.longitude);
-        setState(() {
-          _posicionMoto = moto;
-        });
-        _evaluarRecalculoRuta(moto);
+        _procesarUbicacionGps(pos);
       }
+    } catch (_) {}
+
+    // 3. Escuchar flujo de GPS continuo en tiempo real (alta precisión, sin bloqueos de AndroidSettings)
+    const locationSettings = LocationSettings(
+      accuracy: LocationAccuracy.high,
+      distanceFilter: 2, // cada 2 metros para actualización fluida y precisa
+    );
+
+    _positionStream?.cancel();
+    _positionStream = Geolocator.getPositionStream(
+      locationSettings: locationSettings,
+    ).listen((pos) {
+      _procesarUbicacionGps(pos);
+    }, onError: (err) {
+      debugPrint('Error en stream GPS motoquero: $err');
     });
+
+    // 4. Temporizador de respaldo cada 5 segundos para actualización ininterrumpida
+    _timerFallbackGps?.cancel();
+    _timerFallbackGps = Timer.periodic(const Duration(seconds: 5), (_) async {
+      if (!mounted) return;
+      try {
+        final pos = await Geolocator.getCurrentPosition(
+          locationSettings: const LocationSettings(
+            accuracy: LocationAccuracy.high,
+            timeLimit: Duration(seconds: 4),
+          ),
+        );
+        _procesarUbicacionGps(pos);
+      } catch (_) {}
+    });
+  }
+
+  void _procesarUbicacionGps(Position pos) {
+    if (!mounted) return;
+    final moto = LatLng(pos.latitude, pos.longitude);
+    final motoAnterior = _posicionMoto;
+
+    final double velocidad = pos.speed; // m/s
+    final double distMetros = motoAnterior != null
+        ? Geolocator.distanceBetween(
+            motoAnterior.latitude,
+            motoAnterior.longitude,
+            moto.latitude,
+            moto.longitude,
+          )
+        : 0.0;
+
+    // Calcular o actualizar rumbo (heading) de desplazamiento cuando hay avance
+    if (pos.heading > 0.0 && (velocidad > 0.4 || distMetros > 1.2)) {
+      _rumboMoto = pos.heading;
+    } else if (distMetros >= 1.5 && motoAnterior != null) {
+      final bearing = Geolocator.bearingBetween(
+        motoAnterior.latitude,
+        motoAnterior.longitude,
+        moto.latitude,
+        moto.longitude,
+      );
+      _rumboMoto = (bearing + 360) % 360;
+    }
+
+    // Si el seguimiento estaba en pausa pero el motoquero se empezó a mover (> 7m o velocidad > 1.0 m/s):
+    if (!_seguirDistribuidor && _posicionAlPausar != null) {
+      final distDesdePausa = Geolocator.distanceBetween(
+        _posicionAlPausar!.latitude,
+        _posicionAlPausar!.longitude,
+        moto.latitude,
+        moto.longitude,
+      );
+      if (distDesdePausa > 7.0 || velocidad > 1.0) {
+        _timerAutoReanudarSeguimiento?.cancel();
+        _seguirDistribuidor = true;
+        _posicionAlPausar = null;
+      }
+    }
+
+    setState(() {
+      _posicionMoto = moto;
+    });
+
+    // Centrado automático al desplazarse el distribuidor
+    if (_seguirDistribuidor) {
+      _centrarEnMoto();
+    }
+
+    _evaluarRecalculoRuta(moto);
   }
 
   /// Evalúa si es necesario recalcular la ruta sobre calles (evita saturar OSRM en cada paso de GPS)
@@ -298,9 +405,39 @@ class _MapaRutaScreenState extends State<MapaRutaScreen> {
     }
   }
 
-  void _centrarEnMoto() {
-    if (_posicionMoto != null) {
-      _mapController.move(_posicionMoto!, 16.0);
+  void _centrarEnMoto({double? zoom, double? rotacion}) {
+    if (!mounted || _posicionMoto == null) return;
+    setState(() {
+      _seguirDistribuidor = true;
+      _posicionAlPausar = null;
+    });
+    try {
+      double targetZoom = zoom ?? 16.5;
+      try {
+        final cur = _mapController.camera.zoom;
+        if (zoom == null && cur > 12.0) {
+          targetZoom = cur;
+        }
+      } catch (_) {}
+
+      // Rotación del mapa: si está en modo orientado, el mapa rota para que el rumbo quede hacia arriba
+      double targetRot = 0.0;
+      if (rotacion != null) {
+        targetRot = rotacion;
+      } else if (_orientarConRumbo && _rumboMoto > 0.0) {
+        targetRot = (-_rumboMoto) % 360;
+        if (targetRot < 0) targetRot += 360;
+      }
+
+      if (_orientarConRumbo && _rumboMoto > 0.0) {
+        _mapController.moveAndRotate(_posicionMoto!, targetZoom, targetRot);
+      } else {
+        _mapController.move(_posicionMoto!, targetZoom);
+      }
+    } catch (_) {
+      try {
+        _mapController.move(_posicionMoto!, zoom ?? 16.5);
+      } catch (_) {}
     }
   }
 
@@ -618,9 +755,30 @@ class _MapaRutaScreenState extends State<MapaRutaScreen> {
             mapController: _mapController,
             options: MapOptions(
               initialCenter: puntoInicial,
-              initialZoom: 15.0,
+              initialZoom: 16.5,
+              initialRotation: (_orientarConRumbo && _rumboMoto > 0.0) ? ((-_rumboMoto) % 360) : 0.0,
               minZoom: 5.0,
               maxZoom: 19.0,
+              onPositionChanged: (camera, hasGesture) {
+                if (hasGesture) {
+                  if (_seguirDistribuidor) {
+                    setState(() {
+                      _seguirDistribuidor = false;
+                      _posicionAlPausar = _posicionMoto;
+                    });
+                  }
+                  _timerAutoReanudarSeguimiento?.cancel();
+                  _timerAutoReanudarSeguimiento = Timer(const Duration(seconds: 5), () {
+                    if (mounted && !_seguirDistribuidor && _posicionMoto != null) {
+                      setState(() {
+                        _seguirDistribuidor = true;
+                        _posicionAlPausar = null;
+                      });
+                      _centrarEnMoto();
+                    }
+                  });
+                }
+              },
             ),
             children: [
               TileLayer(
@@ -656,33 +814,11 @@ class _MapaRutaScreenState extends State<MapaRutaScreen> {
 
               // Marcadores en el mapa
               MarkerLayer(
+                rotate: true,
                 markers: [
-                  // Marcador de la MOTO del motoquero
+                  // Marcador de la MOTO del motoquero con rumbo y orientación
                   if (_posicionMoto != null)
-                    Marker(
-                      point: _posicionMoto!,
-                      width: 52,
-                      height: 52,
-                      child: Container(
-                        decoration: BoxDecoration(
-                          shape: BoxShape.circle,
-                          color: const Color(0xFF00C853),
-                          border: Border.all(color: Colors.white, width: 3),
-                          boxShadow: const [
-                            BoxShadow(
-                              color: Colors.black26,
-                              blurRadius: 8,
-                              offset: Offset(0, 4),
-                            ),
-                          ],
-                        ),
-                        child: const Icon(
-                          Icons.two_wheeler,
-                          color: Colors.white,
-                          size: 28,
-                        ),
-                      ),
-                    ),
+                    _buildMarcadorMoto(),
 
                   // Marcadores de cada parada del motoquero
                   ...pendientes.asMap().entries.map((entry) {
@@ -829,12 +965,42 @@ class _MapaRutaScreenState extends State<MapaRutaScreen> {
                 ),
                 const SizedBox(height: 8),
                 FloatingActionButton.small(
+                  heroTag: 'btnOrientacionRuta',
+                  backgroundColor: _orientarConRumbo ? const Color(0xFF1E88E5) : Colors.white,
+                  foregroundColor: _orientarConRumbo ? Colors.white : const Color(0xFF455A64),
+                  onPressed: () {
+                    setState(() {
+                      _orientarConRumbo = !_orientarConRumbo;
+                    });
+                    if (!_orientarConRumbo) {
+                      try {
+                        _mapController.rotate(0.0);
+                      } catch (_) {}
+                    }
+                    _centrarEnMoto();
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      SnackBar(
+                        duration: const Duration(milliseconds: 1400),
+                        backgroundColor: _orientarConRumbo ? const Color(0xFF1E88E5) : const Color(0xFF455A64),
+                        content: Text(
+                          _orientarConRumbo
+                              ? '🧭 Modo Navegación: Mapa orientado al frente de la moto'
+                              : '🧭 Modo Fijo: Norte arriba',
+                        ),
+                      ),
+                    );
+                  },
+                  tooltip: _orientarConRumbo ? 'Orientado al frente (Toca para Norte arriba)' : 'Fijar orientación al frente',
+                  child: const Icon(Icons.explore),
+                ),
+                const SizedBox(height: 8),
+                FloatingActionButton.small(
                   heroTag: 'btnMiMoto',
-                  backgroundColor: const Color(0xFF00C853),
-                  foregroundColor: Colors.white,
+                  backgroundColor: _seguirDistribuidor ? const Color(0xFF00C853) : Colors.white,
+                  foregroundColor: _seguirDistribuidor ? Colors.white : const Color(0xFF0D47A1),
                   onPressed: _centrarEnMoto,
-                  tooltip: 'Centrar en mi moto',
-                  child: const Icon(Icons.my_location),
+                  tooltip: _seguirDistribuidor ? 'Centrado automático activo' : 'Centrar en mi moto',
+                  child: Icon(_seguirDistribuidor ? Icons.gps_fixed : Icons.my_location),
                 ),
               ],
             ),
@@ -878,6 +1044,54 @@ class _MapaRutaScreenState extends State<MapaRutaScreen> {
                 ),
               ),
             ),
+        ],
+      ),
+    );
+  }
+
+  Marker _buildMarcadorMoto() {
+    double rotacionMapaActual = 0.0;
+    try {
+      rotacionMapaActual = _mapController.camera.rotation;
+    } catch (_) {}
+    final anguloMarcadorMoto = ((_rumboMoto + rotacionMapaActual) % 360) * (math.pi / 180.0);
+
+    return Marker(
+      point: _posicionMoto!,
+      width: 56,
+      height: 56,
+      rotate: true,
+      child: Stack(
+        alignment: Alignment.center,
+        children: [
+          Container(
+            width: 52,
+            height: 52,
+            decoration: BoxDecoration(
+              shape: BoxShape.circle,
+              color: const Color(0xFF1E88E5).withValues(alpha: 0.22),
+            ),
+          ),
+          Transform.rotate(
+            angle: anguloMarcadorMoto,
+            child: Container(
+              width: 38,
+              height: 38,
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                color: const Color(0xFF0D47A1),
+                border: Border.all(color: Colors.white, width: 2.5),
+                boxShadow: const [
+                  BoxShadow(color: Colors.black45, blurRadius: 5, offset: Offset(0, 2)),
+                ],
+              ),
+              child: Icon(
+                _rumboMoto > 0.0 ? Icons.navigation : Icons.two_wheeler,
+                color: Colors.white,
+                size: _rumboMoto > 0.0 ? 22 : 20,
+              ),
+            ),
+          ),
         ],
       ),
     );

@@ -29,7 +29,7 @@ sudo chmod -R 775 La-ColinaF-master/storage/app/public
 # 4. Importar base de datos a Docker MySQL
 echo "4. Importando base de datos a MySQL en Docker..."
 cd "$SCRIPT_DIR/La-ColinaF-master"
-sudo docker exec -i laravel_mysql mysql -u root -pColinaRootSecure2026! sisdelivery < "$SCRIPT_DIR/backup_sisdelivery_2026-10-05.sql"
+sudo docker exec -i laravel_mysql mysql -u root -pColinaRootSecure2026! sisdelivery < "$SCRIPT_DIR/backup_sisdelivery_2026-10-09.sql"
 
 # 5. Asegurar storage:link y limpiar cache
 echo "5. Creando enlace simbolico y limpiando cache..."

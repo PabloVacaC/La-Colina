@@ -1,5 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:math' as math;
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_map/flutter_map.dart';
@@ -46,6 +48,12 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
 
   // Estado del mapa y navegación
   LatLng? _posicionMoto;
+  bool _seguirDistribuidor = true; // Centrado automático al desplazarse el distribuidor
+  double _rumboMoto = 0.0; // Ángulo de orientación/rumbo (0-360°)
+  bool _orientarConRumbo = true; // El mapa se orienta dinámicamente según la dirección de avance
+  LatLng? _posicionAlPausar; // Ubicación donde el usuario tocó el mapa para pausar
+  Timer? _timerAutoReanudarSeguimiento; // Temporizador para auto-volver a seguir
+  Timer? _timerFallbackGps; // Temporizador de respaldo para actualización continua
   StreamSubscription<Position>? _positionStream;
   Pedido? _pedidoActivo;
   List<LatLng> _puntosRutaActiva = [];   // Tramo hacia el primer pedido a entregar (AZUL)
@@ -75,6 +83,21 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
     super.initState();
     _tabController = TabController(length: 3, vsync: this);
 
+    // Cuando el usuario entra a la pestaña "En Camino (Mapa)", asegurar centrado inmediato
+    _tabController.addListener(() {
+      if (_tabController.index == 1) {
+        setState(() {
+          _seguirDistribuidor = true;
+          _posicionAlPausar = null;
+        });
+        Future.delayed(const Duration(milliseconds: 200), () {
+          if (mounted && _posicionMoto != null) {
+            _centrarEnMoto();
+          }
+        });
+      }
+    });
+
     // Iniciar transmisión de GPS en segundo plano para el admin
     _location.startTracking(widget.session.motoquero.id);
 
@@ -89,10 +112,20 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
 
   @override
   void dispose() {
+    _timerFallbackGps?.cancel();
+    _location.stateNotifier.removeListener(_escucharLocationService);
+    _timerAutoReanudarSeguimiento?.cancel();
     _refreshTimer?.cancel();
     _positionStream?.cancel();
     _tabController.dispose();
     super.dispose();
+  }
+
+  void _escucharLocationService() {
+    final state = _location.stateNotifier.value;
+    if (state.lastPosition != null && mounted) {
+      _procesarUbicacionGps(state.lastPosition!);
+    }
   }
 
   // =========================================================================
@@ -323,14 +356,15 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
   // =========================================================================
 
   Future<void> _iniciarGpsLocal() async {
+    // 0. Asegurar permisos antes de solicitar ubicación
+    final tienePermiso = await _location.checkAndRequestPermissions();
+    if (!tienePermiso) return;
+
     // 1. Obtener de inmediato la última ubicación conocida (cero espera)
     try {
       final lastPos = await Geolocator.getLastKnownPosition();
       if (lastPos != null && mounted) {
-        setState(() {
-          _posicionMoto = LatLng(lastPos.latitude, lastPos.longitude);
-        });
-        _calcularRutaCalle(forzar: true);
+        _procesarUbicacionGps(lastPos);
       }
     } catch (_) {}
 
@@ -338,34 +372,137 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
     try {
       final pos = await Geolocator.getCurrentPosition(
         locationSettings: const LocationSettings(
-          accuracy: LocationAccuracy.medium,
+          accuracy: LocationAccuracy.high,
           timeLimit: Duration(seconds: 6),
         ),
       );
       if (mounted) {
-        setState(() {
-          _posicionMoto = LatLng(pos.latitude, pos.longitude);
-        });
-        _calcularRutaCalle(forzar: true);
+        _procesarUbicacionGps(pos);
       }
     } catch (_) {}
 
-    // 3. Escuchar flujo de GPS en tiempo real
-    _positionStream = Geolocator.getPositionStream(
-      locationSettings: const LocationSettings(
-        accuracy: LocationAccuracy.high,
-        distanceFilter: 3, // cada 3 metros para reaccionar de inmediato
-      ),
-    ).listen((pos) {
-      if (!mounted) return;
-      final moto = LatLng(pos.latitude, pos.longitude);
-      setState(() {
-        _posicionMoto = moto;
-      });
+    // 3. Escuchar flujo de GPS continuo en tiempo real (alta precisión, sin bloqueos de AndroidSettings)
+    const locationSettings = LocationSettings(
+      accuracy: LocationAccuracy.high,
+      distanceFilter: 2, // cada 2 metros para actualización fluida y precisa
+    );
 
-      _verificarProximidad(moto);
-      _evaluarRecalculoRuta(moto);
+    _positionStream?.cancel();
+    _positionStream = Geolocator.getPositionStream(
+      locationSettings: locationSettings,
+    ).listen((pos) {
+      _procesarUbicacionGps(pos);
+    }, onError: (err) {
+      debugPrint('Error en stream GPS home: $err');
     });
+
+    // 4. Temporizador de respaldo cada 5 segundos para garantizar actualización ininterrumpida
+    _timerFallbackGps?.cancel();
+    _timerFallbackGps = Timer.periodic(const Duration(seconds: 5), (_) async {
+      if (!mounted) return;
+      try {
+        final pos = await Geolocator.getCurrentPosition(
+          locationSettings: const LocationSettings(
+            accuracy: LocationAccuracy.high,
+            timeLimit: Duration(seconds: 4),
+          ),
+        );
+        _procesarUbicacionGps(pos);
+      } catch (_) {}
+    });
+
+    // 5. Escuchar también las actualizaciones del LocationService en segundo plano
+    _location.stateNotifier.removeListener(_escucharLocationService);
+    _location.stateNotifier.addListener(_escucharLocationService);
+  }
+
+  void _procesarUbicacionGps(Position pos) {
+    if (!mounted) return;
+    final moto = LatLng(pos.latitude, pos.longitude);
+    final motoAnterior = _posicionMoto;
+
+    final double velocidad = pos.speed; // m/s
+    final double distMetros = motoAnterior != null
+        ? Geolocator.distanceBetween(
+            motoAnterior.latitude,
+            motoAnterior.longitude,
+            moto.latitude,
+            moto.longitude,
+          )
+        : 0.0;
+
+    // Calcular o actualizar rumbo (heading) de desplazamiento cuando hay avance
+    if (pos.heading > 0.0 && (velocidad > 0.4 || distMetros > 1.2)) {
+      _rumboMoto = pos.heading;
+    } else if (distMetros >= 1.5 && motoAnterior != null) {
+      final bearing = Geolocator.bearingBetween(
+        motoAnterior.latitude,
+        motoAnterior.longitude,
+        moto.latitude,
+        moto.longitude,
+      );
+      _rumboMoto = (bearing + 360) % 360;
+    }
+
+    // Si el seguimiento estaba en pausa por un gesto manual, pero el motoquero se empezó a mover (> 7 metros o velocidad > 1.0 m/s):
+    if (!_seguirDistribuidor && _posicionAlPausar != null) {
+      final distDesdePausa = Geolocator.distanceBetween(
+        _posicionAlPausar!.latitude,
+        _posicionAlPausar!.longitude,
+        moto.latitude,
+        moto.longitude,
+      );
+      if (distDesdePausa > 7.0 || velocidad > 1.0) {
+        _timerAutoReanudarSeguimiento?.cancel();
+        _seguirDistribuidor = true;
+        _posicionAlPausar = null;
+      }
+    }
+
+    setState(() {
+      _posicionMoto = moto;
+    });
+
+    // CENTRADO Y ORIENTACIÓN AUTOMÁTICA EN TIEMPO REAL: EL MAPA SE DESPLAZA Y GIRA JUNTO CON LA MOTO
+    if (_seguirDistribuidor) {
+      _centrarEnMoto();
+    }
+
+    _verificarProximidad(moto);
+    _evaluarRecalculoRuta(moto);
+  }
+
+  /// Centra la cámara del mapa en la posición actual de la moto de forma segura y orientada
+  void _centrarEnMoto({double? zoom, double? rotacion}) {
+    if (!mounted || _posicionMoto == null) return;
+    try {
+      double targetZoom = zoom ?? 16.5;
+      try {
+        final cur = _mapController.camera.zoom;
+        if (zoom == null && cur > 12.0) {
+          targetZoom = cur;
+        }
+      } catch (_) {}
+
+      // Rotación del mapa: si está en modo orientado, el mapa rota para que el rumbo quede hacia arriba
+      double targetRot = 0.0;
+      if (rotacion != null) {
+        targetRot = rotacion;
+      } else if (_orientarConRumbo && _rumboMoto > 0.0) {
+        targetRot = (-_rumboMoto) % 360;
+        if (targetRot < 0) targetRot += 360;
+      }
+
+      if (_orientarConRumbo && _rumboMoto > 0.0) {
+        _mapController.moveAndRotate(_posicionMoto!, targetZoom, targetRot);
+      } else {
+        _mapController.move(_posicionMoto!, targetZoom);
+      }
+    } catch (_) {
+      try {
+        _mapController.move(_posicionMoto!, zoom ?? 16.5);
+      } catch (_) {}
+    }
   }
 
   /// Evalúa si es necesario recalcular la ruta sobre calles (evita saturar OSRM cada 8 metros)
@@ -620,10 +757,18 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
     setState(() {
       _rutaSeleccionada = ruta;
       _pedidoProximidadAbiertoId = null;
+      _seguirDistribuidor = true;
+      _posicionAlPausar = null;
     });
 
     // Cambiar a la pestaña "En Camino" (pestaña 1 - Mapa)
     _tabController.animateTo(1);
+
+    Future.delayed(const Duration(milliseconds: 300), () {
+      if (mounted && _posicionMoto != null) {
+        _centrarEnMoto(zoom: 16.5);
+      }
+    });
 
     final pendientes = _pedidosPendientesRutaActiva;
     if (pendientes.isNotEmpty) {
@@ -928,6 +1073,9 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
           builder: (context, setModalState) {
             return Container(
               margin: const EdgeInsets.all(12),
+              constraints: BoxConstraints(
+                maxHeight: MediaQuery.of(context).size.height * 0.92,
+              ),
               decoration: BoxDecoration(
                 color: Colors.white,
                 borderRadius: BorderRadius.circular(20),
@@ -941,7 +1089,8 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
               ),
               child: SafeArea(
                 top: false,
-                child: Padding(
+                child: SingleChildScrollView(
+                  physics: const BouncingScrollPhysics(),
                   padding: const EdgeInsets.all(16),
                   child: Column(
                     mainAxisSize: MainAxisSize.min,
@@ -2493,33 +2642,52 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
     // Coordenadas para marcadores en el mapa
     final markers = <Marker>[];
 
-    // 1. Marcador de la MOTO del distribuidor
+    // 1. Marcador de la MOTO del distribuidor con indicación de rumbo
     if (_posicionMoto != null) {
+      double rotacionMapaActual = 0.0;
+      try {
+        rotacionMapaActual = _mapController.camera.rotation;
+      } catch (_) {}
+      final anguloMarcadorMoto = ((_rumboMoto + rotacionMapaActual) % 360) * (math.pi / 180.0);
+
       markers.add(
         Marker(
           point: _posicionMoto!,
-          width: 50,
-          height: 50,
+          width: 56,
+          height: 56,
+          rotate: true,
           child: Stack(
             alignment: Alignment.center,
             children: [
+              // Halo translúcido de precisión GPS
               Container(
-                width: 44,
-                height: 44,
+                width: 52,
+                height: 52,
                 decoration: BoxDecoration(
                   shape: BoxShape.circle,
-                  color: Colors.blue.withOpacity(0.25),
+                  color: const Color(0xFF1E88E5).withValues(alpha: 0.22),
                 ),
               ),
-              Container(
-                width: 34,
-                height: 34,
-                decoration: const BoxDecoration(
-                  shape: BoxShape.circle,
-                  color: Color(0xFF0D47A1),
-                  boxShadow: [BoxShadow(color: Colors.black38, blurRadius: 6)],
+              // Flecha de navegación orientada al sentido de avance
+              Transform.rotate(
+                angle: anguloMarcadorMoto,
+                child: Container(
+                  width: 38,
+                  height: 38,
+                  decoration: BoxDecoration(
+                    shape: BoxShape.circle,
+                    color: const Color(0xFF0D47A1),
+                    border: Border.all(color: Colors.white, width: 2.5),
+                    boxShadow: const [
+                      BoxShadow(color: Colors.black45, blurRadius: 5, offset: Offset(0, 2))
+                    ],
+                  ),
+                  child: Icon(
+                    _rumboMoto > 0.0 ? Icons.navigation : Icons.two_wheeler,
+                    color: Colors.white,
+                    size: _rumboMoto > 0.0 ? 22 : 20,
+                  ),
                 ),
-                child: const Icon(Icons.two_wheeler, color: Colors.white, size: 20),
               ),
             ],
           ),
@@ -2620,7 +2788,28 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
           mapController: _mapController,
           options: MapOptions(
             initialCenter: _posicionMoto ?? const LatLng(-17.7833, -63.1821),
-            initialZoom: 14.5,
+            initialZoom: 16.5,
+            onPositionChanged: (camera, hasGesture) {
+              if (hasGesture) {
+                if (_seguirDistribuidor) {
+                  setState(() {
+                    _seguirDistribuidor = false;
+                    _posicionAlPausar = _posicionMoto;
+                  });
+                }
+                // Si el distribuidor movió el mapa manualmente, pausar y auto-reanudar seguimiento en 5 segundos
+                _timerAutoReanudarSeguimiento?.cancel();
+                _timerAutoReanudarSeguimiento = Timer(const Duration(seconds: 5), () {
+                  if (mounted && !_seguirDistribuidor && _posicionMoto != null) {
+                    setState(() {
+                      _seguirDistribuidor = true;
+                      _posicionAlPausar = null;
+                    });
+                    _centrarEnMoto();
+                  }
+                });
+              }
+            },
           ),
           children: [
             TileLayer(
@@ -2651,7 +2840,7 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
                     ),
                 ],
               ),
-            MarkerLayer(markers: markers),
+            MarkerLayer(rotate: true, markers: markers),
           ],
         ),
 
@@ -2681,7 +2870,7 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
                 Container(
                   padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
                   decoration: BoxDecoration(
-                    color: colorRuta.withOpacity(0.12),
+                    color: colorRuta.withValues(alpha: 0.12),
                     borderRadius: BorderRadius.circular(8),
                     border: Border.all(color: colorRuta),
                   ),
@@ -2728,13 +2917,56 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
                   ),
                 ),
 
-                // Botón Centrar en Moto
+                // Botón Orientación / Brújula (Modo Navegación o Norte fijo)
                 IconButton(
-                  icon: const Icon(Icons.my_location, color: Color(0xFF0D47A1)),
-                  tooltip: 'Centrar en mi ubicación',
+                  icon: Icon(
+                    _orientarConRumbo ? Icons.explore : Icons.navigation_outlined,
+                    color: _orientarConRumbo ? const Color(0xFF1E88E5) : Colors.grey.shade600,
+                  ),
+                  tooltip: _orientarConRumbo
+                      ? 'Orientación activa: Giro con la moto (Toca para Norte arriba)'
+                      : 'Orientación: Norte fijo (Toca para girar con la moto)',
+                  onPressed: () {
+                    setState(() {
+                      _orientarConRumbo = !_orientarConRumbo;
+                    });
+                    if (!_orientarConRumbo) {
+                      try {
+                        _mapController.rotate(0.0);
+                      } catch (_) {}
+                    }
+                    if (_posicionMoto != null) {
+                      _centrarEnMoto();
+                    }
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      SnackBar(
+                        duration: const Duration(milliseconds: 1400),
+                        backgroundColor: _orientarConRumbo ? const Color(0xFF1E88E5) : const Color(0xFF455A64),
+                        content: Text(
+                          _orientarConRumbo
+                              ? '🧭 Modo Navegación: Mapa orientado al frente de la moto'
+                              : '🧭 Modo Fijo: Norte arriba',
+                        ),
+                      ),
+                    );
+                  },
+                ),
+
+                // Botón Centrar en Moto / Seguir distribuidor
+                IconButton(
+                  icon: Icon(
+                    _seguirDistribuidor ? Icons.gps_fixed : Icons.my_location,
+                    color: _seguirDistribuidor ? const Color(0xFF00C853) : const Color(0xFF0D47A1),
+                  ),
+                  tooltip: _seguirDistribuidor ? 'Siguiendo al distribuidor en tiempo real' : 'Centrar y seguir distribuidor',
                   onPressed: () {
                     if (_posicionMoto != null) {
-                      _mapController.move(_posicionMoto!, 16.0);
+                      _timerAutoReanudarSeguimiento?.cancel();
+                      setState(() {
+                        _seguirDistribuidor = true;
+                        _posicionAlPausar = null;
+                      });
+                      _centrarEnMoto(zoom: 16.5);
                     }
                   },
                 ),
@@ -2752,6 +2984,29 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
             left: 12,
             right: 12,
             child: _buildTarjetaFlotantePedidoActivo(_pedidoActivo!),
+          ),
+
+        // Botón flotante para reanudar el centrado cuando el usuario desplazó el mapa manualmente
+        if (!_seguirDistribuidor && _posicionMoto != null)
+          Positioned(
+            right: 16,
+            bottom: (_pedidoActivo != null && _pedidoActivo!.estado != 'Entregado') ? 190 : 20,
+            child: FloatingActionButton.extended(
+              heroTag: 'btnReanudarSeguimientoHome',
+              backgroundColor: const Color(0xFF00C853),
+              foregroundColor: Colors.white,
+              elevation: 5,
+              icon: const Icon(Icons.gps_fixed, size: 18),
+              label: const Text('Recentrar en mí', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13)),
+              onPressed: () {
+                _timerAutoReanudarSeguimiento?.cancel();
+                setState(() {
+                  _seguirDistribuidor = true;
+                  _posicionAlPausar = null;
+                });
+                _centrarEnMoto(zoom: 16.5);
+              },
+            ),
           ),
       ],
     );
@@ -3309,16 +3564,15 @@ class _DialogoFinalizarEntregaState extends State<_DialogoFinalizarEntrega> {
 
   @override
   Widget build(BuildContext context) {
-    const double tableWidth = 430.0;
-
     return Dialog(
       backgroundColor: Colors.white,
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-      insetPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 24),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+      insetPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 14),
       clipBehavior: Clip.antiAlias,
       child: ConstrainedBox(
         constraints: const BoxConstraints(maxWidth: 480),
         child: SingleChildScrollView(
+          physics: const BouncingScrollPhysics(),
           child: Column(
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -3327,14 +3581,14 @@ class _DialogoFinalizarEntregaState extends State<_DialogoFinalizarEntrega> {
               // ENCABEZADO MODAL
               // =========================
               Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 9),
                 child: Row(
                   mainAxisAlignment: MainAxisAlignment.spaceBetween,
                   children: [
                     const Text(
                       'Finalizar entrega',
                       style: TextStyle(
-                        fontSize: 17,
+                        fontSize: 15,
                         fontWeight: FontWeight.bold,
                         color: Color(0xFF212529),
                       ),
@@ -3343,12 +3597,12 @@ class _DialogoFinalizarEntregaState extends State<_DialogoFinalizarEntrega> {
                       onTap: () => Navigator.pop(context),
                       borderRadius: BorderRadius.circular(4),
                       child: Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                        padding: const EdgeInsets.all(3),
                         decoration: BoxDecoration(
                           border: Border.all(color: Colors.grey.shade400),
                           borderRadius: BorderRadius.circular(4),
                         ),
-                        child: const Icon(Icons.remove, size: 14, color: Color(0xFF6C757D)),
+                        child: const Icon(Icons.close, size: 14, color: Color(0xFF6C757D)),
                       ),
                     ),
                   ],
@@ -3360,7 +3614,7 @@ class _DialogoFinalizarEntregaState extends State<_DialogoFinalizarEntrega> {
               // CUERPO MODAL
               // =========================
               Padding(
-                padding: const EdgeInsets.all(16),
+                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
@@ -3368,8 +3622,8 @@ class _DialogoFinalizarEntregaState extends State<_DialogoFinalizarEntrega> {
                     if (widget.pedido.tieneDescuento) ...[
                       Container(
                         width: double.infinity,
-                        margin: const EdgeInsets.only(bottom: 12),
-                        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
+                        margin: const EdgeInsets.only(bottom: 6),
+                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
                         decoration: BoxDecoration(
                           color: const Color(0xFFFFF3E0),
                           borderRadius: BorderRadius.circular(6),
@@ -3377,13 +3631,13 @@ class _DialogoFinalizarEntregaState extends State<_DialogoFinalizarEntrega> {
                         ),
                         child: Row(
                           children: [
-                            const Icon(Icons.local_offer, size: 16, color: Color(0xFFE65100)),
-                            const SizedBox(width: 8),
+                            const Icon(Icons.local_offer, size: 12, color: Color(0xFFE65100)),
+                            const SizedBox(width: 5),
                             Expanded(
                               child: Text(
-                                'Cliente con ${widget.pedido.tipoDescuento ?? 'precio especial con descuento'} aplicado automáticamente.',
+                                'Cliente con ${widget.pedido.tipoDescuento ?? 'precio especial con descuento'} aplicado.',
                                 style: const TextStyle(
-                                  fontSize: 12,
+                                  fontSize: 10.5,
                                   fontWeight: FontWeight.bold,
                                   color: Color(0xFFE65100),
                                 ),
@@ -3398,22 +3652,22 @@ class _DialogoFinalizarEntregaState extends State<_DialogoFinalizarEntrega> {
                     if (_esUltimaCompra) ...[
                       Container(
                         width: double.infinity,
-                        margin: const EdgeInsets.only(bottom: 12),
-                        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
+                        margin: const EdgeInsets.only(bottom: 6),
+                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
                         decoration: BoxDecoration(
                           color: const Color(0xFFE8F5E9),
-                          borderRadius: BorderRadius.circular(6),
+                          borderRadius: BorderRadius.circular(4),
                           border: Border.all(color: const Color(0xFF81C784)),
                         ),
                         child: Row(
                           children: const [
-                            Icon(Icons.history, size: 16, color: Color(0xFF2E7D32)),
-                            SizedBox(width: 8),
+                            Icon(Icons.history, size: 13, color: Color(0xFF2E7D32)),
+                            SizedBox(width: 5),
                             Expanded(
                               child: Text(
                                 'Repitiendo última compra registrada de este cliente',
                                 style: TextStyle(
-                                  fontSize: 12,
+                                  fontSize: 10.5,
                                   fontWeight: FontWeight.bold,
                                   color: Color(0xFF2E7D32),
                                 ),
@@ -3425,22 +3679,22 @@ class _DialogoFinalizarEntregaState extends State<_DialogoFinalizarEntrega> {
                     ] else if (widget.pedido.detalles.isEmpty) ...[
                       Container(
                         width: double.infinity,
-                        margin: const EdgeInsets.only(bottom: 12),
-                        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
+                        margin: const EdgeInsets.only(bottom: 6),
+                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
                         decoration: BoxDecoration(
                           color: const Color(0xFFE3F2FD),
-                          borderRadius: BorderRadius.circular(6),
+                          borderRadius: BorderRadius.circular(4),
                           border: Border.all(color: const Color(0xFF90CAF9)),
                         ),
                         child: Row(
                           children: const [
-                            Icon(Icons.person_add_alt_1, size: 16, color: Color(0xFF1565C0)),
-                            SizedBox(width: 8),
+                            Icon(Icons.person_add_alt_1, size: 13, color: Color(0xFF1565C0)),
+                            SizedBox(width: 5),
                             Expanded(
                               child: Text(
-                                'Cliente nuevo o sin compras previas (Cantidad inicial: 1)',
+                                'Cliente nuevo (Cantidad inicial: 1)',
                                 style: TextStyle(
-                                  fontSize: 12,
+                                  fontSize: 10.5,
                                   fontWeight: FontWeight.bold,
                                   color: Color(0xFF1565C0),
                                 ),
@@ -3451,357 +3705,332 @@ class _DialogoFinalizarEntregaState extends State<_DialogoFinalizarEntrega> {
                       ),
                     ],
 
-                    // Contenedor scroll horizontal con ancho fijo de tabla
-                    SingleChildScrollView(
-                      scrollDirection: Axis.horizontal,
-                      child: SizedBox(
-                        width: tableWidth,
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            // Encabezado de la tabla (thead-light)
-                            Container(
-                              width: tableWidth,
-                              padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 4),
+                    // TABLA RESPONSIVA COMPACTA (100% VISIBLE SIN SCROLL HORIZONTAL)
+                    Container(
+                      decoration: BoxDecoration(
+                        border: Border.all(color: const Color(0xFFDEE2E6)),
+                        borderRadius: BorderRadius.circular(4),
+                      ),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: [
+                          // Encabezado de la tabla
+                          Container(
+                            padding: const EdgeInsets.symmetric(vertical: 5, horizontal: 4),
+                            decoration: const BoxDecoration(
+                              color: Color(0xFFF1F3F5),
+                              borderRadius: BorderRadius.vertical(top: Radius.circular(3)),
+                            ),
+                            child: Row(
+                              children: const [
+                                Expanded(
+                                  child: Text(
+                                    'Producto',
+                                    textAlign: TextAlign.center,
+                                    style: TextStyle(fontSize: 10.5, fontWeight: FontWeight.bold, color: Color(0xFF495057)),
+                                  ),
+                                ),
+                                SizedBox(
+                                  width: 58,
+                                  child: Text(
+                                    'Precio',
+                                    textAlign: TextAlign.center,
+                                    style: TextStyle(fontSize: 10.5, fontWeight: FontWeight.bold, color: Color(0xFF495057)),
+                                  ),
+                                ),
+                                SizedBox(
+                                  width: 44,
+                                  child: Text(
+                                    'Cant.',
+                                    textAlign: TextAlign.center,
+                                    style: TextStyle(fontSize: 10.5, fontWeight: FontWeight.bold, color: Color(0xFF495057)),
+                                  ),
+                                ),
+                                SizedBox(
+                                  width: 56,
+                                  child: Text(
+                                    'Total',
+                                    textAlign: TextAlign.center,
+                                    style: TextStyle(fontSize: 10.5, fontWeight: FontWeight.bold, color: Color(0xFF495057)),
+                                  ),
+                                ),
+                                SizedBox(width: 26),
+                              ],
+                            ),
+                          ),
+
+                          // Filas de productos
+                          ..._filas.asMap().entries.map((entry) {
+                            final idx = entry.key;
+                            final f = entry.value;
+                            final int selectedId = _catalogo.any((p) => p.id == f.producto.id)
+                                ? f.producto.id
+                                : _catalogo.first.id;
+
+                            return Container(
+                              padding: const EdgeInsets.symmetric(vertical: 3, horizontal: 3),
                               decoration: const BoxDecoration(
-                                color: Color(0xFFF1F3F5),
                                 border: Border(
-                                  bottom: BorderSide(color: Color(0xFFDEE2E6)),
+                                  top: BorderSide(color: Color(0xFFF1F3F5)),
                                 ),
                               ),
                               child: Row(
-                                children: const [
-                                  SizedBox(
-                                    width: 140,
-                                    child: Text(
-                                      'Producto',
-                                      textAlign: TextAlign.center,
-                                      style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: Color(0xFF495057)),
-                                    ),
-                                  ),
-                                  SizedBox(
-                                    width: 75,
-                                    child: Text(
-                                      'Precio ref.',
-                                      textAlign: TextAlign.center,
-                                      style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: Color(0xFF495057)),
-                                    ),
-                                  ),
-                                  SizedBox(
-                                    width: 55,
-                                    child: Text(
-                                      'Cantidad',
-                                      textAlign: TextAlign.center,
-                                      style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: Color(0xFF495057)),
-                                    ),
-                                  ),
-                                  SizedBox(
-                                    width: 80,
-                                    child: Text(
-                                      'Total (Bs)',
-                                      textAlign: TextAlign.center,
-                                      style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: Color(0xFF495057)),
-                                    ),
-                                  ),
-                                  SizedBox(
-                                    width: 45,
-                                    child: Text(
-                                      'Acción',
-                                      textAlign: TextAlign.center,
-                                      style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: Color(0xFF495057)),
-                                    ),
-                                  ),
-                                ],
-                              ),
-                            ),
-
-                            // Filas de productos
-                            ..._filas.asMap().entries.map((entry) {
-                              final idx = entry.key;
-                              final f = entry.value;
-                              final int selectedId = _catalogo.any((p) => p.id == f.producto.id)
-                                  ? f.producto.id
-                                  : _catalogo.first.id;
-
-                              return Container(
-                                width: tableWidth,
-                                padding: const EdgeInsets.symmetric(vertical: 6, horizontal: 4),
-                                decoration: const BoxDecoration(
-                                  border: Border(
-                                    bottom: BorderSide(color: Color(0xFFF1F3F5)),
-                                  ),
-                                ),
-                                child: Row(
-                                  children: [
-                                    // 1. Selector de Producto
-                                    SizedBox(
-                                      width: 140,
-                                      height: 38,
-                                      child: Container(
-                                        padding: const EdgeInsets.symmetric(horizontal: 6),
-                                        decoration: BoxDecoration(
-                                          color: Colors.white,
-                                          borderRadius: BorderRadius.circular(4),
-                                          border: Border.all(color: const Color(0xFFCED4DA)),
-                                        ),
-                                        child: DropdownButtonHideUnderline(
-                                          child: DropdownButton<int>(
-                                            isExpanded: true,
-                                            value: selectedId,
-                                            icon: const Icon(Icons.keyboard_arrow_down, color: Color(0xFF495057), size: 18),
-                                            style: const TextStyle(fontSize: 12, color: Color(0xFF212529)),
-                                            items: _catalogo.map((p) => DropdownMenuItem<int>(
-                                              value: p.id,
-                                              child: Text(p.nombre, overflow: TextOverflow.ellipsis, maxLines: 1),
-                                            )).toList(),
-                                            onChanged: (newId) {
-                                              if (newId != null) {
-                                                final nuevo = _catalogo.firstWhere((p) => p.id == newId);
-                                                setState(() {
-                                                  f.producto = nuevo;
-                                                  f.precioUnitario = _obtenerPrecioCliente(nuevo);
-                                                });
-                                              }
-                                            },
-                                          ),
-                                        ),
+                                children: [
+                                  // 1. Selector de Producto (Flexible)
+                                  Expanded(
+                                    child: Container(
+                                      height: 30,
+                                      padding: const EdgeInsets.symmetric(horizontal: 4),
+                                      decoration: BoxDecoration(
+                                        color: Colors.white,
+                                        borderRadius: BorderRadius.circular(4),
+                                        border: Border.all(color: const Color(0xFFCED4DA)),
                                       ),
-                                    ),
-                                    const SizedBox(width: 4),
-
-                                    // 2. Precio ref.
-                                    SizedBox(
-                                      width: 75,
-                                      child: (widget.pedido.preciosProductos.containsKey(f.producto.id) &&
-                                              widget.pedido.preciosProductos[f.producto.id]! < f.producto.precio)
-                                          ? Column(
-                                              mainAxisAlignment: MainAxisAlignment.center,
-                                              children: [
-                                                Text(
-                                                  '${f.precioUnitario.toStringAsFixed(2)} Bs',
-                                                  textAlign: TextAlign.center,
-                                                  style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: Color(0xFF2E7D32)),
-                                                ),
-                                                Text(
-                                                  '${f.producto.precio.toStringAsFixed(2)} Bs',
-                                                  textAlign: TextAlign.center,
-                                                  style: const TextStyle(fontSize: 10, decoration: TextDecoration.lineThrough, color: Colors.grey),
-                                                ),
-                                              ],
-                                            )
-                                          : Text(
-                                              '${f.precioUnitario.toStringAsFixed(2)} Bs',
-                                              textAlign: TextAlign.center,
-                                              style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: Color(0xFF6C757D)),
-                                            ),
-                                    ),
-                                    const SizedBox(width: 4),
-
-                                    // 3. Cantidad editable
-                                    SizedBox(
-                                      width: 55,
-                                      height: 38,
-                                      child: Container(
-                                        decoration: BoxDecoration(
-                                          color: Colors.white,
-                                          borderRadius: BorderRadius.circular(4),
-                                          border: Border.all(color: const Color(0xFFCED4DA)),
-                                        ),
-                                        alignment: Alignment.center,
-                                        child: TextField(
-                                          controller: f.cantidadController,
-                                          keyboardType: TextInputType.number,
-                                          textAlign: TextAlign.center,
-                                          style: const TextStyle(fontSize: 13, fontWeight: FontWeight.bold),
-                                          decoration: const InputDecoration(
-                                            isDense: true,
-                                            contentPadding: EdgeInsets.symmetric(vertical: 6),
-                                            border: InputBorder.none,
-                                          ),
-                                          onChanged: (val) {
-                                            final c = int.tryParse(val);
-                                            setState(() {
-                                              if (c != null && c >= 1) {
-                                                f.cantidad = c;
-                                              } else if (val.isEmpty) {
-                                                f.cantidad = 0;
-                                              }
-                                            });
+                                      child: DropdownButtonHideUnderline(
+                                        child: DropdownButton<int>(
+                                          isExpanded: true,
+                                          value: selectedId,
+                                          icon: const Icon(Icons.keyboard_arrow_down, color: Color(0xFF495057), size: 15),
+                                          style: const TextStyle(fontSize: 10.5, color: Color(0xFF212529)),
+                                          items: _catalogo.map((p) => DropdownMenuItem<int>(
+                                            value: p.id,
+                                            child: Text(p.nombre, overflow: TextOverflow.ellipsis, maxLines: 1),
+                                          )).toList(),
+                                          onChanged: (newId) {
+                                            if (newId != null) {
+                                              final nuevo = _catalogo.firstWhere((p) => p.id == newId);
+                                              setState(() {
+                                                f.producto = nuevo;
+                                                f.precioUnitario = _obtenerPrecioCliente(nuevo);
+                                              });
+                                            }
                                           },
                                         ),
                                       ),
                                     ),
-                                    const SizedBox(width: 4),
+                                  ),
+                                  const SizedBox(width: 3),
 
-                                    // 4. Total fila (Readonly gris)
-                                    SizedBox(
-                                      width: 80,
-                                      height: 38,
+                                  // 2. Precio ref.
+                                  SizedBox(
+                                    width: 58,
+                                    child: (widget.pedido.preciosProductos.containsKey(f.producto.id) &&
+                                            widget.pedido.preciosProductos[f.producto.id]! < f.producto.precio)
+                                        ? Column(
+                                            mainAxisAlignment: MainAxisAlignment.center,
+                                            children: [
+                                              Text(
+                                                f.precioUnitario.toStringAsFixed(2),
+                                                textAlign: TextAlign.center,
+                                                style: const TextStyle(fontSize: 10.5, fontWeight: FontWeight.bold, color: Color(0xFF2E7D32)),
+                                              ),
+                                              Text(
+                                                f.producto.precio.toStringAsFixed(2),
+                                                textAlign: TextAlign.center,
+                                                style: const TextStyle(fontSize: 8.5, decoration: TextDecoration.lineThrough, color: Colors.grey),
+                                              ),
+                                            ],
+                                          )
+                                        : Text(
+                                            '${f.precioUnitario.toStringAsFixed(2)} Bs',
+                                            textAlign: TextAlign.center,
+                                            style: const TextStyle(fontSize: 10.5, fontWeight: FontWeight.w600, color: Color(0xFF495057)),
+                                          ),
+                                  ),
+                                  const SizedBox(width: 3),
+
+                                  // 3. Cantidad editable
+                                  SizedBox(
+                                    width: 44,
+                                    height: 30,
+                                    child: Container(
+                                      decoration: BoxDecoration(
+                                        color: Colors.white,
+                                        borderRadius: BorderRadius.circular(4),
+                                        border: Border.all(color: const Color(0xFFCED4DA)),
+                                      ),
+                                      alignment: Alignment.center,
+                                      child: TextField(
+                                        controller: f.cantidadController,
+                                        keyboardType: TextInputType.number,
+                                        textAlign: TextAlign.center,
+                                        style: const TextStyle(fontSize: 11.5, fontWeight: FontWeight.bold),
+                                        decoration: const InputDecoration(
+                                          isDense: true,
+                                          contentPadding: EdgeInsets.symmetric(vertical: 3),
+                                          border: InputBorder.none,
+                                        ),
+                                        onChanged: (val) {
+                                          final c = int.tryParse(val);
+                                          setState(() {
+                                            if (c != null && c >= 1) {
+                                              f.cantidad = c;
+                                            } else if (val.isEmpty) {
+                                              f.cantidad = 0;
+                                            }
+                                          });
+                                        },
+                                      ),
+                                    ),
+                                  ),
+                                  const SizedBox(width: 3),
+
+                                  // 4. Total fila
+                                  SizedBox(
+                                    width: 56,
+                                    height: 30,
+                                    child: Container(
+                                      decoration: BoxDecoration(
+                                        color: const Color(0xFFE9ECEF),
+                                        borderRadius: BorderRadius.circular(4),
+                                        border: Border.all(color: const Color(0xFFCED4DA)),
+                                      ),
+                                      alignment: Alignment.center,
+                                      child: Text(
+                                        f.subtotal.toStringAsFixed(2),
+                                        style: const TextStyle(fontSize: 10.5, fontWeight: FontWeight.bold, color: Color(0xFF495057)),
+                                      ),
+                                    ),
+                                  ),
+                                  const SizedBox(width: 3),
+
+                                  // 5. Botón Acción Borrar
+                                  SizedBox(
+                                    width: 26,
+                                    height: 26,
+                                    child: InkWell(
+                                      onTap: () {
+                                        if (_filas.length > 1) {
+                                          setState(() {
+                                            _filas.removeAt(idx);
+                                          });
+                                        } else {
+                                          ScaffoldMessenger.of(context).showSnackBar(
+                                            const SnackBar(content: Text('Debe haber al menos un producto.')),
+                                          );
+                                        }
+                                      },
+                                      borderRadius: BorderRadius.circular(4),
                                       child: Container(
                                         decoration: BoxDecoration(
-                                          color: const Color(0xFFE9ECEF),
+                                          color: const Color(0xFFFFEBEE),
                                           borderRadius: BorderRadius.circular(4),
-                                          border: Border.all(color: const Color(0xFFCED4DA)),
                                         ),
                                         alignment: Alignment.center,
-                                        child: Text(
-                                          f.subtotal.toStringAsFixed(2).replaceAll('.', ','),
-                                          style: const TextStyle(fontSize: 13, fontWeight: FontWeight.bold, color: Color(0xFF495057)),
-                                        ),
+                                        child: const Icon(Icons.delete_outline, color: Color(0xFFDC3545), size: 15),
                                       ),
                                     ),
-                                    const SizedBox(width: 4),
-
-                                    // 5. Botón Acción (Papelera roja)
-                                    SizedBox(
-                                      width: 45,
-                                      height: 36,
-                                      child: InkWell(
-                                        onTap: () {
-                                          if (_filas.length > 1) {
-                                            setState(() {
-                                              _filas.removeAt(idx);
-                                            });
-                                          } else {
-                                            ScaffoldMessenger.of(context).showSnackBar(
-                                              const SnackBar(content: Text('Debe haber al menos un producto.')),
-                                            );
-                                          }
-                                        },
-                                        borderRadius: BorderRadius.circular(4),
-                                        child: Container(
-                                          decoration: BoxDecoration(
-                                            color: const Color(0xFFDC3545),
-                                            borderRadius: BorderRadius.circular(4),
-                                          ),
-                                          alignment: Alignment.center,
-                                          child: const Icon(Icons.delete, color: Colors.white, size: 18),
-                                        ),
-                                      ),
-                                    ),
-                                  ],
-                                ),
-                              );
-                            }),
-
-                            // Línea divisoria y Fila de Total General
-                            Container(
-                              width: tableWidth,
-                              height: 1,
-                              color: const Color(0xFFDEE2E6),
-                              margin: const EdgeInsets.symmetric(vertical: 8),
-                            ),
-                            Container(
-                              width: tableWidth,
-                              padding: const EdgeInsets.symmetric(vertical: 4),
-                              child: Row(
-                                mainAxisAlignment: MainAxisAlignment.end,
-                                children: [
-                                  const Text(
-                                    'Total general (Bs):',
-                                    style: TextStyle(fontSize: 13, fontWeight: FontWeight.bold, color: Color(0xFF212529)),
                                   ),
-                                  const SizedBox(width: 10),
-                                  Container(
-                                    width: 80,
-                                    height: 38,
-                                    decoration: BoxDecoration(
-                                      color: const Color(0xFFE9ECEF),
-                                      borderRadius: BorderRadius.circular(4),
-                                      border: Border.all(color: const Color(0xFFCED4DA)),
-                                    ),
-                                    alignment: Alignment.center,
-                                    child: Text(
-                                      _totalGeneral.toStringAsFixed(2).replaceAll('.', ','),
-                                      style: const TextStyle(fontSize: 14, fontWeight: FontWeight.bold, color: Color(0xFF212529)),
-                                    ),
-                                  ),
-                                  const SizedBox(width: 49),
                                 ],
                               ),
-                            ),
-                          ],
-                        ),
+                            );
+                          }),
+                        ],
                       ),
                     ),
 
-                    const SizedBox(height: 12),
+                    const SizedBox(height: 7),
 
-                    // Botón "+ Agregar producto" (Cyan / Teal)
-                    ElevatedButton.icon(
-                      onPressed: () {
-                        final nuevoProd = _catalogo.first;
-                        setState(() {
-                          _filas.add(_FilaProductoItem(
-                            producto: nuevoProd,
-                            precioUnitario: _obtenerPrecioCliente(nuevoProd),
-                            cantidad: 1,
-                          ));
-                        });
-                      },
-                      icon: const Icon(Icons.add, size: 16, color: Colors.white),
-                      label: const Text(
-                        'Agregar producto',
-                        style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 13),
-                      ),
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: const Color(0xFF17A2B8),
-                        elevation: 0,
-                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(4)),
-                        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-                      ),
-                    ),
-
-                    const SizedBox(height: 18),
-
-                    // =========================
-                    // MÉTODO DE PAGO
-                    // =========================
-                    const Text(
-                      'Método de pago:',
-                      style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14, color: Color(0xFF212529)),
-                    ),
-                    const SizedBox(height: 8),
-
-                    Container(
-                      height: 42,
-                      width: double.infinity,
-                      padding: const EdgeInsets.symmetric(horizontal: 12),
-                      decoration: BoxDecoration(
-                        color: Colors.white,
-                        borderRadius: BorderRadius.circular(4),
-                        border: Border.all(color: const Color(0xFFCED4DA)),
-                      ),
-                      child: DropdownButtonHideUnderline(
-                        child: DropdownButton<String>(
-                          isExpanded: true,
-                          value: _metodoPago.isEmpty ? null : _metodoPago,
-                          hint: const Text('Seleccione...', style: TextStyle(color: Color(0xFF6C757D), fontSize: 14)),
-                          icon: const Icon(Icons.keyboard_arrow_down, color: Color(0xFF495057), size: 20),
-                          style: const TextStyle(fontSize: 14, color: Color(0xFF212529)),
-                          items: const [
-                            DropdownMenuItem(value: 'Efectivo', child: Text('Efectivo')),
-                            DropdownMenuItem(value: 'QR', child: Text('QR')),
-                          ],
-                          onChanged: (val) {
+                    // Fila conjunta: "+ Agregar" a la izquierda y "Total general: Bs. XX" a la derecha
+                    Row(
+                      children: [
+                        OutlinedButton.icon(
+                          onPressed: () {
+                            final nuevoProd = _catalogo.first;
                             setState(() {
-                              _metodoPago = val ?? '';
+                              _filas.add(_FilaProductoItem(
+                                producto: nuevoProd,
+                                precioUnitario: _obtenerPrecioCliente(nuevoProd),
+                                cantidad: 1,
+                              ));
                             });
                           },
+                          icon: const Icon(Icons.add, size: 13, color: Color(0xFF17A2B8)),
+                          label: const Text(
+                            'Agregar producto',
+                            style: TextStyle(color: Color(0xFF17A2B8), fontWeight: FontWeight.bold, fontSize: 11),
+                          ),
+                          style: OutlinedButton.styleFrom(
+                            side: const BorderSide(color: Color(0xFF17A2B8)),
+                            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                            minimumSize: const Size(0, 28),
+                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(4)),
+                          ),
                         ),
-                      ),
+                        const Spacer(),
+                        const Text(
+                          'Total (Bs):',
+                          style: TextStyle(fontSize: 11.5, fontWeight: FontWeight.bold, color: Color(0xFF212529)),
+                        ),
+                        const SizedBox(width: 5),
+                        Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
+                          decoration: BoxDecoration(
+                            color: const Color(0xFFE8F5E9),
+                            borderRadius: BorderRadius.circular(4),
+                            border: Border.all(color: const Color(0xFF81C784)),
+                          ),
+                          child: Text(
+                            'Bs. ${_totalGeneral.toStringAsFixed(2)}',
+                            style: const TextStyle(fontSize: 12.5, fontWeight: FontWeight.w900, color: Color(0xFF2E7D32)),
+                          ),
+                        ),
+                      ],
+                    ),
+
+                    const SizedBox(height: 7),
+
+                    // =========================
+                    // MÉTODO DE PAGO EN UNA SOLA LÍNEA
+                    // =========================
+                    Row(
+                      children: [
+                        const Text(
+                          'Método de pago:',
+                          style: TextStyle(fontWeight: FontWeight.bold, fontSize: 11.5, color: Color(0xFF212529)),
+                        ),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: Container(
+                            height: 32,
+                            padding: const EdgeInsets.symmetric(horizontal: 8),
+                            decoration: BoxDecoration(
+                              color: Colors.white,
+                              borderRadius: BorderRadius.circular(4),
+                              border: Border.all(color: const Color(0xFFCED4DA)),
+                            ),
+                            child: DropdownButtonHideUnderline(
+                              child: DropdownButton<String>(
+                                isExpanded: true,
+                                value: _metodoPago.isEmpty ? null : _metodoPago,
+                                hint: const Text('Seleccione...', style: TextStyle(color: Color(0xFF6C757D), fontSize: 11.5)),
+                                icon: const Icon(Icons.keyboard_arrow_down, color: Color(0xFF495057), size: 17),
+                                style: const TextStyle(fontSize: 11.5, color: Color(0xFF212529), fontWeight: FontWeight.w600),
+                                items: const [
+                                  DropdownMenuItem(value: 'Efectivo', child: Text('Efectivo')),
+                                  DropdownMenuItem(value: 'QR', child: Text('QR')),
+                                ],
+                                onChanged: (val) {
+                                  setState(() {
+                                    _metodoPago = val ?? '';
+                                  });
+                                },
+                              ),
+                            ),
+                          ),
+                        ),
+                      ],
                     ),
                   ],
                 ),
               ),
-
               Container(height: 1, color: const Color(0xFFDEE2E6)),
 
               // =========================
               // BOTONES CANCELAR Y FINALIZAR
               // =========================
               Padding(
-                padding: const EdgeInsets.all(12),
+                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
                 child: Row(
                   mainAxisAlignment: MainAxisAlignment.end,
                   children: [
@@ -3811,9 +4040,10 @@ class _DialogoFinalizarEntregaState extends State<_DialogoFinalizarEntrega> {
                         backgroundColor: const Color(0xFF6C757D),
                         elevation: 0,
                         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(4)),
-                        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+                        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                        minimumSize: const Size(0, 32),
                       ),
-                      child: const Text('Cancelar', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 13)),
+                      child: const Text('Cancelar', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 11.5)),
                     ),
                     const SizedBox(width: 8),
                     ElevatedButton(
@@ -3854,9 +4084,10 @@ class _DialogoFinalizarEntregaState extends State<_DialogoFinalizarEntrega> {
                         backgroundColor: const Color(0xFF28A745),
                         elevation: 0,
                         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(4)),
-                        padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 10),
+                        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
+                        minimumSize: const Size(0, 32),
                       ),
-                      child: const Text('Finalizar', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 13)),
+                      child: const Text('Finalizar', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 11.5)),
                     ),
                   ],
                 ),
