@@ -705,6 +705,9 @@
                 </div>
 
                 <div class="rutas-asignados-wrapper">
+                    @php
+                        $tieneAsignados = false;
+                    @endphp
                     @foreach(['A','B','C','D'] as $r)
                         @php
                             $asignadosRuta = $pedidos
@@ -715,12 +718,13 @@
                                 ->values();
                         @endphp
 
-                        <div class="cuadro-ruta-asignada mb-3 p-2 bg-white rounded border shadow-sm">
-                            <div class="d-flex justify-content-between align-items-center mb-2 px-1">
-                                <span class="badge bg-primary text-white" style="font-size: 11px;">
-                                    <i class="fas fa-route"></i> Ruta {{ $r }} ({{ $asignadosRuta->count() }} pedidos)
-                                </span>
-                                @if($asignadosRuta->count() > 0)
+                        @if($asignadosRuta->count() > 0)
+                            @php $tieneAsignados = true; @endphp
+                            <div class="cuadro-ruta-asignada mb-3 p-2 bg-white rounded border shadow-sm">
+                                <div class="d-flex justify-content-between align-items-center mb-2 px-1">
+                                    <span class="badge bg-primary text-white" style="font-size: 11px;">
+                                        <i class="fas fa-route"></i> Ruta {{ $r }} ({{ $asignadosRuta->count() }} pedidos)
+                                    </span>
                                     <button 
                                         class="btn btn-xs btn-outline-dark btn-ver-mapa-asignados py-0 px-1"
                                         style="font-size: 10px;"
@@ -728,15 +732,9 @@
                                         data-ruta="{{ $r }}">
                                         🗺 Mapa Ruta {{ $r }}
                                     </button>
-                                @endif
-                            </div>
+                                </div>
 
-                            <div class="lista-asignado lista-ruta" data-motoquero="{{ $motoquero->id }}" data-ruta="{{ $r }}">
-                                @if($asignadosRuta->isEmpty())
-                                    <div class="pedido-item text-muted text-center py-2 small" style="background:#fdfdfd; cursor:default;">
-                                        Sin pedidos asignados en Ruta {{ $r }}
-                                    </div>
-                                @else
+                                <div class="lista-asignado lista-ruta" data-motoquero="{{ $motoquero->id }}" data-ruta="{{ $r }}">
                                     @foreach($asignadosRuta as $index => $p)
                                         @php
                                             $ultimaCompra = \App\Models\Pedido::with('detalles')
@@ -780,10 +778,16 @@
                                             </div>
                                         </div>
                                     @endforeach
-                                @endif
+                                </div>
                             </div>
-                        </div>
+                        @endif
                     @endforeach
+
+                    @if(!$tieneAsignados)
+                        <div class="pedido-item text-muted text-center py-2 small" style="background:#fdfdfd; cursor:default;">
+                            Sin pedidos asignados
+                        </div>
+                    @endif
                 </div>
             </div>
 
