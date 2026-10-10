@@ -779,21 +779,21 @@ public function editarPedido($id)
     return response()->json([
         'id'           => $pedido->id,
         'estado'       => $pedido->estado,
-        'cliente'      => $pedido->cliente->nombre,
-        'ubicacion'    => $pedido->cliente->ubicacion_gps,
+        'cliente'      => $pedido->cliente ? $pedido->cliente->nombre : ($pedido->observaciones ?? 'Cliente'),
+        'ubicacion'    => $pedido->cliente ? $pedido->cliente->ubicacion_gps : ($pedido->ubicacion_gps ?? null),
         'motoquero_id' => $pedido->motoquero_id,
-        'ruta'         => $pedido->ruta,
-        'promo_activa' => (bool)$pedido->cliente->promo_activa,
+        'ruta'         => $pedido->ruta ?? 'A',
+        'promo_activa' => $pedido->cliente ? (bool)$pedido->cliente->promo_activa : false,
     ]);
 }
 
 public function actualizarEdicion(Request $request)
 {
     $request->validate([
-        'pedido_id'   => 'required|integer|exists:pedidos,id',
-        'promo_activa'=> 'required|boolean',
-        'ruta'        => 'required|in:A,B,C,D',
-        'motoquero_id'=> 'required|integer|exists:motoqueros,id',
+        'pedido_id'    => 'required|integer|exists:pedidos,id',
+        'promo_activa' => 'required|boolean',
+        'ruta'         => 'required|in:A,B,C,D',
+        'motoquero_id' => 'nullable',
     ]);
 
     DB::beginTransaction();
@@ -802,26 +802,48 @@ public function actualizarEdicion(Request $request)
 
         $pedido = Pedido::with('cliente')->findOrFail($request->pedido_id);
 
-        // ✅ ACTUALIZAR PROMO DEL CLIENTE
-        $pedido->cliente->update([
-            'promo_activa' => $request->promo_activa
-        ]);
+        // ✅ ACTUALIZAR PROMO DEL CLIENTE (si tiene cliente)
+        if ($pedido->cliente) {
+            $pedido->cliente->update([
+                'promo_activa' => $request->promo_activa ? 1 : 0
+            ]);
+        }
 
-        // ✅ RECALCULAR ORDEN (al final de la ruta)
-        $ultimoOrden = Pedido::where('motoquero_id', $request->motoquero_id)
-            ->where('ruta', $request->ruta)
-            ->where('estado', $pedido->estado)
-            ->whereDate('created_at', today())
-            ->max('orden') ?? 0;
+        $motoqueroId = $request->motoquero_id ?: null;
+        $nuevoEstado = $pedido->estado;
 
-        // ✅ ACTUALIZAR PEDIDO
-        $pedido->update([
-            'descripcion' => $request->descripcion,
-            'motoquero_id'=> $request->motoquero_id,
-            'ruta'        => $request->ruta,
-            'orden'       => $ultimoOrden + 1,
-            'updated_at'  => now(),
-        ]);
+        // Si se asigna motoquero a un pedido pendiente/por asignar, pasa a 'Asignado'
+        if ($motoqueroId && in_array($pedido->estado, ['Pendiente', 'Por asignar'])) {
+            $nuevoEstado = 'Asignado';
+        } elseif (!$motoqueroId && in_array($pedido->estado, ['Pendiente', 'Por asignar'])) {
+            $nuevoEstado = 'Pendiente';
+        }
+
+        // ✅ RECALCULAR ORDEN (al final de la ruta para el motoquero asignado)
+        $nuevoOrden = $pedido->orden;
+        if ($motoqueroId) {
+            $ultimoOrden = Pedido::where('motoquero_id', $motoqueroId)
+                ->where('ruta', $request->ruta)
+                ->where('estado', $nuevoEstado)
+                ->whereDate('created_at', today())
+                ->max('orden') ?? 0;
+            $nuevoOrden = $ultimoOrden + 1;
+        }
+
+        // ✅ ACTUALIZAR PEDIDO (sin sobreescribir descripcion con null si no vino en el request)
+        $pedidoData = [
+            'motoquero_id' => $motoqueroId,
+            'ruta'         => $request->ruta,
+            'orden'        => $nuevoOrden,
+            'estado'       => $nuevoEstado,
+            'updated_at'   => now(),
+        ];
+
+        if ($request->filled('descripcion')) {
+            $pedidoData['descripcion'] = $request->descripcion;
+        }
+
+        $pedido->update($pedidoData);
 
         DB::commit();
 

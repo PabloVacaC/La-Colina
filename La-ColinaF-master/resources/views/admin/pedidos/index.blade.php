@@ -383,10 +383,10 @@
 
                                         <!-- BOTÓN EDITAR -->
                                         <button
+                                            type="button"
                                             class="btn btn-sm btn-outline-primary btn-editar-pedido"
-                                            data-bs-toggle="modal"
-                                            data-bs-target="#modalEditarPedido"
                                             data-pedido-id="{{ $pedido->id }}"
+                                            title="Editar pedido"
                                         >
                                             <i class="fas fa-edit"></i>
                                         </button>
@@ -3075,53 +3075,50 @@ function detenerSonido() {
 <script>
 // (El rastreo en vivo de motoqueros y pedidos ahora se gestiona directamente en el mapa Leaflet general)
 
-
-
-<script>
-let modalEditarInstance = null;
-
 // ===============================
-// Inicializar modal UNA VEZ
-// ===============================
-document.addEventListener('DOMContentLoaded', () => {
-
-    const modalEl = document.getElementById('modalEditarPedido');
-    if (!modalEl) {
-        console.error('❌ Modal editar no encontrado');
-        return;
-    }
-
-    modalEditarInstance = new bootstrap.Modal(modalEl, {
-        backdrop: true,
-        keyboard: true
-    });
-});
-
-// ===============================
-// Abrir modal (FUNCIÓN GLOBAL)
+// Funciones globales para modal editar
 // ===============================
 function abrirModalEditar() {
-    if (!modalEditarInstance) return;
-    modalEditarInstance.show();
+    if (typeof $ !== 'undefined' && typeof $('#modalEditarPedido').modal === 'function') {
+        $('#modalEditarPedido').modal('show');
+    } else if (typeof bootstrap !== 'undefined' && bootstrap.Modal) {
+        let m = bootstrap.Modal.getInstance(document.getElementById('modalEditarPedido'));
+        if (!m) m = new bootstrap.Modal(document.getElementById('modalEditarPedido'));
+        m.show();
+    } else {
+        const el = document.getElementById('modalEditarPedido');
+        if (el) {
+            el.classList.add('show');
+            el.style.display = 'block';
+            document.body.classList.add('modal-open');
+        }
+    }
 }
 
-// ===============================
-// Cerrar modal (FUNCIÓN GLOBAL)
-// ===============================
 function cerrarModalEditar() {
-    if (!modalEditarInstance) return;
-    modalEditarInstance.hide();
+    if (typeof $ !== 'undefined' && typeof $('#modalEditarPedido').modal === 'function') {
+        $('#modalEditarPedido').modal('hide');
+    } else if (typeof bootstrap !== 'undefined' && bootstrap.Modal) {
+        let m = bootstrap.Modal.getInstance(document.getElementById('modalEditarPedido'));
+        if (m) m.hide();
+    } else {
+        const el = document.getElementById('modalEditarPedido');
+        if (el) {
+            el.classList.remove('show');
+            el.style.display = 'none';
+            document.body.classList.remove('modal-open');
+        }
+    }
 }
-</script>
 
-
-<script>
+// ===============================
+// Event listener para abrir modal editar pedido
+// ===============================
 document.addEventListener('click', function (e) {
 
     const btn = e.target.closest('.btn-editar-pedido');
     if (!btn) return;
 
-    // 🛑 CLAVES ABSOLUTAS
     e.preventDefault();
     e.stopPropagation();
 
@@ -3129,61 +3126,66 @@ document.addEventListener('click', function (e) {
     if (!pedidoId) return;
 
     fetch(`/admin/pedidos/${pedidoId}/editar`)
-        .then(res => res.json())
-        .then(data => {
-
-            if (!['Por asignar', 'Asignado'].includes(data.estado)) {
-                Swal.fire(
-                    'No permitido',
-                    'Este pedido no se puede editar',
-                    'warning'
-                );
-                return;
+        .then(res => {
+            if (!res.ok) {
+                throw new Error('Error al consultar pedido');
             }
-
-            // Cargar datos
-            document.getElementById('edit_pedido_id').value = data.id;
-            document.getElementById('edit_cliente').value = data.cliente;
-            document.getElementById('edit_motoquero').value = data.motoquero_id ?? '';
-            document.getElementById('edit_ruta').value = data.ruta ?? 'A';
-            document.getElementById('edit_promo_activa').checked = data.promo_activa == 1;
-
+            return res.json();
+        })
+        .then(data => {
+            // Cargar datos en el modal
+            const elId = document.getElementById('edit_pedido_id');
+            const elCliente = document.getElementById('edit_cliente');
+            const elMotoquero = document.getElementById('edit_motoquero');
+            const elRuta = document.getElementById('edit_ruta');
+            const elPromo = document.getElementById('edit_promo_activa');
             const link = document.getElementById('edit_ubicacion');
-            if (data.ubicacion) {
-                link.href = data.ubicacion;
-                link.textContent = 'Ver ubicación';
-            } else {
-                link.href = '#';
-                link.textContent = 'No registrada';
+
+            if (elId) elId.value = data.id;
+            if (elCliente) elCliente.value = data.cliente || '';
+            if (elMotoquero) elMotoquero.value = (data.motoquero_id !== null && data.motoquero_id !== undefined) ? data.motoquero_id : '';
+            if (elRuta) elRuta.value = data.ruta || 'A';
+            if (elPromo) elPromo.checked = (data.promo_activa == 1 || data.promo_activa === true);
+
+            if (link) {
+                if (data.ubicacion) {
+                    link.href = data.ubicacion;
+                    link.textContent = 'Ver ubicación';
+                    link.style.pointerEvents = 'auto';
+                } else {
+                    link.href = 'javascript:void(0)';
+                    link.textContent = 'No registrada';
+                    link.style.pointerEvents = 'none';
+                }
             }
 
             abrirModalEditar();
         })
-        .catch(() => {
+        .catch(err => {
+            console.error('Error al abrir modal editar:', err);
             Swal.fire('Error', 'No se pudo cargar el pedido', 'error');
         });
 
 });
-</script>
 
-
-<script>
+// ===============================
+// Event listener para guardar edición
+// ===============================
 document.addEventListener('DOMContentLoaded', function () {
 
     const btnGuardar = document.getElementById('btnGuardarEdicion');
-
-    if (!btnGuardar) {
-        console.error('❌ btnGuardarEdicion NO existe en el DOM');
-        return;
-    }
+    if (!btnGuardar) return;
 
     btnGuardar.addEventListener('click', function () {
 
         const pedidoId = document.getElementById('edit_pedido_id')?.value;
         if (!pedidoId) {
-            console.warn('⚠️ No hay pedido_id');
+            Swal.fire('Atención', 'No se ha seleccionado ningún pedido', 'warning');
             return;
         }
+
+        btnGuardar.disabled = true;
+        btnGuardar.innerHTML = '<i class="fas fa-spinner fa-spin mr-1"></i> Guardando...';
 
         const data = {
             pedido_id: pedidoId,
@@ -3206,6 +3208,8 @@ document.addEventListener('DOMContentLoaded', function () {
             return res.json();
         })
         .then(() => {
+            btnGuardar.disabled = false;
+            btnGuardar.innerHTML = 'Guardar cambios';
             cerrarModalEditar();
 
             Swal.fire({
@@ -3216,7 +3220,9 @@ document.addEventListener('DOMContentLoaded', function () {
             }).then(() => location.reload());
         })
         .catch(err => {
-            console.error(err);
+            console.error('Error al guardar edición:', err);
+            btnGuardar.disabled = false;
+            btnGuardar.innerHTML = 'Guardar cambios';
             Swal.fire('Error', 'No se pudo guardar el pedido', 'error');
         });
 
@@ -3433,14 +3439,15 @@ document.querySelectorAll('.btnPagadoCentral').forEach(btn => {
 
 
 <!-- MODAL EDITAR PEDIDO -->
-<div class="modal fade" id="modalEditarPedido" tabindex="-1" aria-hidden="true">
-    <div class="modal-dialog modal-lg modal-dialog-centered">
+<div class="modal fade" id="modalEditarPedido" tabindex="-1" role="dialog" aria-labelledby="modalEditarPedidoLabel" aria-hidden="true">
+    <div class="modal-dialog modal-lg modal-dialog-centered" role="document">
         <div class="modal-content">
 
             <div class="modal-header">
-                <h5 class="modal-title">Editar pedido</h5>
-                <!-- ❌ SIN data-bs-dismiss -->
-                <button type="button" class="btn-close" onclick="cerrarModalEditar()"></button>
+                <h5 class="modal-title" id="modalEditarPedidoLabel">Editar pedido</h5>
+                <button type="button" class="close" data-dismiss="modal" aria-label="Close" onclick="cerrarModalEditar()">
+                    <span aria-hidden="true">&times;</span>
+                </button>
             </div>
 
             <div class="modal-body">
@@ -3448,30 +3455,31 @@ document.querySelectorAll('.btnPagadoCentral').forEach(btn => {
                 <input type="hidden" id="edit_pedido_id">
 
                 <!-- DATOS DEL CLIENTE -->
-                <div class="mb-3">
-                    <label class="form-label">Cliente</label>
-                    <input type="text" class="form-control" id="edit_cliente" readonly>
+                <div class="form-group mb-3">
+                    <label class="form-label font-weight-bold">Cliente</label>
+                    <input type="text" class="form-control" id="edit_cliente" readonly style="background-color: #e9ecef;">
                 </div>
 
-                <div class="mb-3">
-                    <label class="form-label">Ubicación</label>
-                    <a href="#" target="_blank" id="edit_ubicacion">Ver ubicación</a>
+                <div class="form-group mb-3">
+                    <label class="form-label font-weight-bold mr-2">Ubicación</label>
+                    <a href="#" target="_blank" id="edit_ubicacion" class="text-primary font-weight-bold">Ver ubicación</a>
                 </div>
 
                 <hr>
 
                 <!-- PROMOCIÓN -->
-                <div class="form-check mt-2">
+                <div class="form-check mb-3">
                     <input class="form-check-input" type="checkbox" id="edit_promo_activa">
-                    <label class="form-check-label" for="edit_promo_activa">
+                    <label class="form-check-label ml-1" for="edit_promo_activa">
                         Cliente con promoción activa
                     </label>
                 </div>
 
                 <!-- DISTRIBUIDOR -->
-                <div class="mb-3">
-                    <label class="form-label">Distribuidor</label>
-                    <select class="form-select" id="edit_motoquero">
+                <div class="form-group mb-3">
+                    <label class="form-label font-weight-bold">Distribuidor</label>
+                    <select class="form-control" id="edit_motoquero">
+                        <option value="">-- Sin asignar --</option>
                         @foreach($motoqueros as $m)
                             <option value="{{ $m->id }}">
                                 {{ $m->apellidos }} {{ $m->nombres }}
@@ -3481,9 +3489,9 @@ document.querySelectorAll('.btnPagadoCentral').forEach(btn => {
                 </div>
 
                 <!-- RUTA -->
-                <div class="mb-3">
-                    <label class="form-label">Ruta</label>
-                    <select class="form-select" id="edit_ruta">
+                <div class="form-group mb-3">
+                    <label class="form-label font-weight-bold">Ruta</label>
+                    <select class="form-control" id="edit_ruta">
                         <option value="A">Ruta A</option>
                         <option value="B">Ruta B</option>
                         <option value="C">Ruta C</option>
@@ -3494,8 +3502,8 @@ document.querySelectorAll('.btnPagadoCentral').forEach(btn => {
             </div>
 
             <div class="modal-footer">
-                <button class="btn btn-secondary" onclick="cerrarModalEditar()">Cancelar</button>
-                <button class="btn btn-primary" id="btnGuardarEdicion">
+                <button type="button" class="btn btn-secondary" data-dismiss="modal" onclick="cerrarModalEditar()">Cancelar</button>
+                <button type="button" class="btn btn-primary" id="btnGuardarEdicion">
                     Guardar cambios
                 </button>
             </div>
