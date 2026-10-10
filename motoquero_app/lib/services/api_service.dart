@@ -7,7 +7,7 @@ import '../models/user_model.dart';
 import '../models/pedido_model.dart';
 
 class ApiService {
-  static const String defaultBaseUrl = 'http://13.217.89.84:8000/api';
+  static const String defaultBaseUrl = 'http://3.233.120.54:8000/api';
   static const String keyBaseUrl = 'custom_base_url';
 
   static final ApiService _instance = ApiService._internal();
@@ -23,8 +23,11 @@ class ApiService {
   Future<void> init() async {
     final prefs = await SharedPreferences.getInstance();
     final saved = prefs.getString(keyBaseUrl);
-    // Si tenía una IP local de prueba (192.168 o localhost), actualizar a la IP de producción AWS
-    if (saved != null && !saved.contains('192.168.') && !saved.contains('localhost')) {
+    // Si tenía una IP anterior (13.217.89.84, 192.168 o localhost), actualizar a la nueva IP fija
+    if (saved != null && 
+        !saved.contains('13.217.89.84') && 
+        !saved.contains('192.168.') && 
+        !saved.contains('localhost')) {
       _baseUrl = saved;
     } else {
       _baseUrl = defaultBaseUrl;

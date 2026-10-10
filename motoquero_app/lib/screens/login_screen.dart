@@ -89,7 +89,7 @@ class _LoginScreenState extends State<LoginScreen> {
               controller: urlController,
               decoration: const InputDecoration(
                 labelText: 'URL de la API',
-                hintText: 'http://13.217.89.84:8000/api',
+                hintText: 'http://3.233.120.54:8000/api',
                 border: OutlineInputBorder(),
                 prefixIcon: Icon(Icons.wifi),
               ),
