@@ -699,7 +699,7 @@
             </div>
 
             {{-- ===================================== --}}
-            {{-- ASIGNADO (TODOS LOS PEDIDOS ASIGNADOS DEL DISTRIBUIDOR) --}}
+            {{-- ASIGNADO (ENCAPSULADO POR RUTA A, B, C, D) --}}
             {{-- ===================================== --}}
             <div class="estado-section">
                 <div class="estado-title asignado">🟦 Asignado</div>
@@ -707,9 +707,7 @@
                 @php
                     $asignadosMotoquero = $pedidos
                         ->where('estado','Asignado')
-                        ->where('motoquero_id',$motoquero->id)
-                        ->sortBy(function($it) { return $it->orden === null ? PHP_INT_MAX : $it->orden; })
-                        ->values();
+                        ->where('motoquero_id',$motoquero->id);
                 @endphp
 
                 <div class="d-flex justify-content-between align-items-center mt-2 mb-2">
@@ -726,54 +724,86 @@
                     @endif
                 </div>
 
-                <div class="lista-asignado lista-ruta" data-motoquero="{{ $motoquero->id }}">
-                    @if($asignadosMotoquero->isEmpty())
-                        <div class="pedido-item text-muted">No hay pedidos asignados para este distribuidor.</div>
-                    @else
-                        @foreach($asignadosMotoquero as $index => $p)
-                            @php
-                                $ultimaCompra = \App\Models\Pedido::with('detalles')
-                                    ->where('cliente_id', $p->cliente_id)
-                                    ->where('estado', 'Entregado')
-                                    ->where('id', '!=', $p->id)
-                                    ->orderBy('updated_at', 'desc')
-                                    ->first();
-                            @endphp
+                <div class="rutas-asignados-wrapper">
+                    @foreach(['A','B','C','D'] as $r)
+                        @php
+                            $asignadosRuta = $pedidos
+                                ->where('estado','Asignado')
+                                ->where('motoquero_id',$motoquero->id)
+                                ->where('ruta', $r)
+                                ->sortBy(function($it) { return $it->orden === null ? PHP_INT_MAX : $it->orden; })
+                                ->values();
+                        @endphp
 
-                            <div class="pedido-item pedido-card" data-id="{{ $p->id }}">
-
-                                <b>#{{ $p->orden && $p->orden > 0 ? $p->orden : ($index + 1) }}</b> - {{ $p->cliente ? $p->cliente->nombre : 'Cliente' }}
-                                <small class="badge bg-secondary ms-1" style="font-size: 10px;">Ruta {{ $p->ruta ?? '-' }}</small>
-
-                                {{-- GPS --}}
-                                <div>
-                                    <small>
-                                        @if($p->cliente && $p->cliente->ubicacion_gps)
-                                            <a href="{{ $p->cliente->ubicacion_gps }}" target="_blank">Ver enlace</a>
-                                        @else
-                                            <span class="text-muted">No registrado</span>
-                                        @endif
-                                    </small>
-                                </div>
-
-                                {{-- ÚLTIMA COMPRA --}}
-                                <div class="mt-1">
-                                    <small><b>Última compra:</b></small>
-                                    @if($ultimaCompra && $ultimaCompra->detalles->count() > 0)
-                                        <ul class="mb-0 ps-3">
-                                            @foreach($ultimaCompra->detalles as $d)
-                                                <li>
-                                                    <small>{{ $d->producto }} × {{ $d->cantidad }}</small>
-                                                </li>
-                                            @endforeach
-                                        </ul>
-                                    @else
-                                        <small class="text-muted">Sin compras anteriores</small>
-                                    @endif
-                                </div>
+                        <div class="cuadro-ruta-asignada mb-3 p-2 bg-white rounded border shadow-sm">
+                            <div class="d-flex justify-content-between align-items-center mb-2 px-1">
+                                <span class="badge bg-primary text-white" style="font-size: 11px;">
+                                    <i class="fas fa-route"></i> Ruta {{ $r }} ({{ $asignadosRuta->count() }} pedidos)
+                                </span>
+                                @if($asignadosRuta->count() > 0)
+                                    <button 
+                                        class="btn btn-xs btn-outline-dark btn-ver-mapa-asignados py-0 px-1"
+                                        style="font-size: 10px;"
+                                        data-motoquero="{{ $motoquero->id }}"
+                                        data-ruta="{{ $r }}">
+                                        🗺 Mapa Ruta {{ $r }}
+                                    </button>
+                                @endif
                             </div>
-                        @endforeach
-                    @endif
+
+                            <div class="lista-asignado lista-ruta" data-motoquero="{{ $motoquero->id }}" data-ruta="{{ $r }}">
+                                @if($asignadosRuta->isEmpty())
+                                    <div class="pedido-item text-muted text-center py-2 small" style="background:#fdfdfd; cursor:default;">
+                                        Sin pedidos asignados en Ruta {{ $r }}
+                                    </div>
+                                @else
+                                    @foreach($asignadosRuta as $index => $p)
+                                        @php
+                                            $ultimaCompra = \App\Models\Pedido::with('detalles')
+                                                ->where('cliente_id', $p->cliente_id)
+                                                ->where('estado', 'Entregado')
+                                                ->where('id', '!=', $p->id)
+                                                ->orderBy('updated_at', 'desc')
+                                                ->first();
+                                        @endphp
+
+                                        <div class="pedido-item pedido-card" data-id="{{ $p->id }}">
+
+                                            <b>#{{ $p->orden && $p->orden > 0 ? $p->orden : ($index + 1) }}</b> - {{ $p->cliente ? $p->cliente->nombre : 'Cliente' }}
+                                            <small class="badge bg-secondary ms-1" style="font-size: 10px;">Ruta {{ $p->ruta ?? $r }}</small>
+
+                                            {{-- GPS --}}
+                                            <div>
+                                                <small>
+                                                    @if($p->cliente && $p->cliente->ubicacion_gps)
+                                                        <a href="{{ $p->cliente->ubicacion_gps }}" target="_blank">Ver enlace</a>
+                                                    @else
+                                                        <span class="text-muted">No registrado</span>
+                                                    @endif
+                                                </small>
+                                            </div>
+
+                                            {{-- ÚLTIMA COMPRA --}}
+                                            <div class="mt-1">
+                                                <small><b>Última compra:</b></small>
+                                                @if($ultimaCompra && $ultimaCompra->detalles->count() > 0)
+                                                    <ul class="mb-0 ps-3">
+                                                        @foreach($ultimaCompra->detalles as $d)
+                                                            <li>
+                                                                <small>{{ $d->producto }} × {{ $d->cantidad }}</small>
+                                                            </li>
+                                                        @endforeach
+                                                    </ul>
+                                                @else
+                                                    <small class="text-muted">Sin compras anteriores</small>
+                                                @endif
+                                            </div>
+                                        </div>
+                                    @endforeach
+                                @endif
+                            </div>
+                        </div>
+                    @endforeach
                 </div>
             </div>
 
@@ -2403,7 +2433,7 @@ function actualizarBotonEmergencia() {
     // Recorremos cada lista de ASIGNADOS
     document.querySelectorAll('.lista-asignado').forEach(lista => {
 
-        const primerPedido = lista.querySelector('.pedido-item');
+        const primerPedido = lista.querySelector('.pedido-item[data-id]');
 
         if (!primerPedido) return;
 
