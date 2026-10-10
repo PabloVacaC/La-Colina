@@ -575,26 +575,6 @@
                         }
                     @endphp
 
-                    <div class="ruta-selector-header mb-3 p-2 bg-white rounded border shadow-sm text-center">
-                        <div class="fw-bold small text-muted mb-1">
-                            <i class="fas fa-route text-primary"></i> RUTAS DEL DISTRIBUIDOR
-                        </div>
-                        <div class="btn-group w-100" role="group">
-                            @foreach(['A','B','C','D'] as $r)
-                                @php
-                                    $cntActivos = $pedidos->where('motoquero_id', $motoquero->id)->where('ruta', $r)->whereIn('estado', ['Por asignar', 'Asignado', 'En camino'])->count();
-                                @endphp
-                                <button type="button" 
-                                        class="btn btn-sm btn-outline-primary btn-ruta {{ $r === $rutaInicial ? 'active' : '' }}" 
-                                        data-ruta="{{ $r }}">
-                                    <b>Ruta {{ $r }}</b>
-                                    @if($cntActivos > 0)
-                                        <span class="badge bg-warning text-dark ms-1" style="font-size: 10px;">{{ $cntActivos }}</span>
-                                    @endif
-                                </button>
-                            @endforeach
-                        </div>
-                    </div>
 
             {{-- ===================================== --}}
             {{-- POR ASIGNAR – RUTAS A B C D (VISUAL) --}}
