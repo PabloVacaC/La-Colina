@@ -1065,13 +1065,7 @@
 
 
 
-.btn-emergencia-bar {width: 100%; border: none; background-color: #dc3545; color: #fff; font-size: 12px; padding: 6px 0; margin-bottom: 6px; border-radius: 4px; font-weight: bold; letter-spacing: 0.5px; cursor: pointer; }
-
-/* Cuando ya está marcado */
-.btn-emergencia-bar.emergencia-activa { background-color: #6c757d; /* gris */ cursor: not-allowed; }
-
-/* Hover solo si NO está activo */
-.btn-emergencia-bar:not(.emergencia-activa):hover { background-color: #b52a37; }
+.btn-emergencia-bar { display: none !important; }
 
 
 .ruta-selector { display: flex; gap: 6px; }
@@ -2426,26 +2420,8 @@ document.addEventListener('click', function (e) {
 
 <script>
 function actualizarBotonEmergencia() {
-
-    // Quitar todos los botones existentes
+    // Quitar todos los botones de emergencia
     document.querySelectorAll('.btn-emergencia-bar').forEach(b => b.remove());
-
-    // Recorremos cada lista de ASIGNADOS
-    document.querySelectorAll('.lista-asignado').forEach(lista => {
-
-        const primerPedido = lista.querySelector('.pedido-item[data-id]');
-
-        if (!primerPedido) return;
-
-        const pedidoId = primerPedido.dataset.id;
-
-        const boton = document.createElement('button');
-        boton.className = 'btn-emergencia-bar';
-        boton.dataset.pedidoId = pedidoId;
-        boton.textContent = '🚨 PEDIDO DE EMERGENCIA';
-
-        primerPedido.prepend(boton);
-    });
 }
 </script>
 
