@@ -812,23 +812,20 @@ public function actualizarEdicion(Request $request)
         $motoqueroId = $request->motoquero_id ?: null;
         $nuevoEstado = $pedido->estado;
 
-        // Si se edita distribuidor o ruta en un pedido no entregado, queda en 'Por asignar' (o 'Pendiente' si no tiene distribuidor)
-        // Solo lo edita, NO lo auto-asigna a 'Asignado'.
-        if ($pedido->estado !== 'Entregado') {
-            if ($motoqueroId) {
-                $nuevoEstado = 'Por asignar';
-            } else {
-                $nuevoEstado = 'Pendiente';
-            }
+        // Si se asigna motoquero a un pedido pendiente/por asignar, pasa a 'Asignado'
+        if ($motoqueroId && in_array($pedido->estado, ['Pendiente', 'Por asignar'])) {
+            $nuevoEstado = 'Asignado';
+        } elseif (!$motoqueroId && in_array($pedido->estado, ['Pendiente', 'Por asignar'])) {
+            $nuevoEstado = 'Pendiente';
         }
 
-        // ✅ RECALCULAR ORDEN (al final de la ruta para el motoquero en 'Por asignar')
+        // ✅ RECALCULAR ORDEN (al final de la ruta para el motoquero asignado)
         $nuevoOrden = $pedido->orden;
         if ($motoqueroId) {
             $fechaPedido = $pedido->created_at ? $pedido->created_at->toDateString() : today();
             $ultimoOrden = Pedido::where('motoquero_id', $motoqueroId)
                 ->where('ruta', $request->ruta)
-                ->where('estado', 'Por asignar')
+                ->where('estado', $nuevoEstado)
                 ->whereDate('created_at', $fechaPedido)
                 ->max('orden') ?? 0;
             $nuevoOrden = $ultimoOrden + 1;
