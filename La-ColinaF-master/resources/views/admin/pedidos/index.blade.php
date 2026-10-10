@@ -887,125 +887,117 @@
             </div>
 
             {{-- ===================================== --}}
-            {{-- ENTREGADO (SEGREGADO POR RUTA A, B, C, D) --}}
+            {{-- ENTREGADO (TODAS LAS ENTREGAS DEL DISTRIBUIDOR DEL DÍA) --}}
             {{-- ===================================== --}}
             <div class="estado-section entregado-scroll">
                 <div class="estado-title entregado">🟩 Entregado</div>
 
-                <div class="rutas-container mt-2">
-                    @foreach(['A','B','C','D'] as $ruta)
-                        @php
-                            $entregadosRuta = $pedidos
-                                ->where('estado','Entregado')
-                                ->where('motoquero_id',$motoquero->id)
-                                ->where('ruta', $ruta)
-                                ->sortByDesc('updated_at')
-                                ->values();
-                        @endphp
+                @php
+                    $entregadosMotoquero = $pedidos
+                        ->where('estado','Entregado')
+                        ->where('motoquero_id',$motoquero->id)
+                        ->sortByDesc('updated_at')
+                        ->values();
+                @endphp
 
-                        <div class="ruta ruta-{{ $ruta }} {{ $ruta === $rutaInicial ? 'active' : '' }}" data-ruta="{{ $ruta }}">
+                <div class="mt-2 mb-2">
+                    <span class="badge bg-success" style="font-size: 11px;">
+                        {{ $entregadosMotoquero->count() }} entregados
+                    </span>
+                </div>
 
-                            <div class="mb-2">
-                                <span class="badge bg-success" style="font-size: 11px;">
-                                    Ruta {{ $ruta }} ({{ $entregadosRuta->count() }} entregados)
-                                </span>
+                <div class="lista-entregado" data-motoquero="{{ $motoquero->id }}">
+                    @if($entregadosMotoquero->isEmpty())
+                        <div class="pedido-item text-muted">No hay pedidos entregados para este distribuidor.</div>
+                    @else
+                        @foreach($entregadosMotoquero as $p)
+                            <div class="pedido-item">
+                                <div class="d-flex justify-content-between align-items-center">
+                                    <b>#{{ $p->orden && $p->orden > 0 ? $p->orden : '' }} {{ $p->cliente ? $p->cliente->nombre : 'Cliente' }}</b>
+                                    <button 
+                                        class="btn btn-sm btn-success px-2 py-0 btnEditarEntrega"
+                                        style="font-size:12px;"
+                                        data-id="{{ $p->id }}"
+                                    >
+                                        Editar
+                                    </button>
+                                </div>
+
+                                <small><b>Total:</b> Bs {{ number_format($p->total_precio ?? 0,2) }}</small><br>
+                                <small><b>Pago:</b> {{ $p->metodo_pago ?? 'No definido' }}</small>
+                            
+                                {{-- BOTON - RECIBO --}}
+                                @php
+                                    $lineasProductos = "";
+                                    foreach ($p->detalles as $detalle) {
+                                        $nombre = $detalle->producto;
+                                        $cantidad = $detalle->cantidad;
+                                        $precio = $detalle->precio_total;
+                                        $lineasProductos .= "• $nombre — Cant: $cantidad — Bs $precio\n";
+                                    }
+
+                                    $total = $p->total_precio;
+                                    $metodo = ucfirst($p->metodo_pago);
+
+                                    $mensajeBase =
+                                        "Hola, gracias por su compra 🙌\n\n".
+                                        "🧾 *RECIBO DE COMPRA*\n\n".
+                                        $lineasProductos . "\n".
+                                        "💰 *TOTAL*: Bs $total\n".
+                                        "💳 *Método de pago*: $metodo\n\n".
+                                        "¡Gracias por confiar en nosotros!";
+
+                                    if (strtolower($metodo) === 'efectivo') {
+                                        $msgEntrega = urlencode($mensajeBase);
+                                    } else if (strtolower($metodo) === 'qr') {
+                                        $mensajeQR = $mensajeBase . "\n\n/";
+                                        $msgEntrega = urlencode($mensajeQR);
+                                    } else {
+                                        $msgEntrega = urlencode($mensajeBase);
+                                    }
+
+                                    $totalQR = number_format($p->total_precio ?? 0, 2);
+                                    $mensajeQRDirecto = "/QR $totalQR Bs.";
+                                    $msgQR = urlencode($mensajeQRDirecto);
+                                @endphp
+
+                                <div class="d-flex flex-wrap mt-1" style="gap:5px;">
+                                    <a href="https://wa.me/{{ $p->cliente ? $p->cliente->celular_real : '' }}?text={{ $msgEntrega }}"
+                                        target="_blank"
+                                        class="btn btn-primary py-0 px-2"
+                                        style="font-size:11px;">
+                                        <i class="fab fa-whatsapp"></i> Recibo
+                                    </a>
+
+                                    @if(strtolower($p->metodo_pago) === 'qr')
+                                        @if(!$p->qr_pago_estado)
+                                            <a href="https://wa.me/{{ $p->cliente ? $p->cliente->celular_real : '' }}?text={{ $msgQR }}"
+                                                target="_blank"
+                                                class="btn btn-warning py-0 px-2"
+                                                style="font-size:11px;">
+                                                QR
+                                            </a>
+
+                                            <button 
+                                                class="btn btn-success py-0 px-2 btnPagadoCentral"
+                                                style="font-size:11px;"
+                                                data-id="{{ $p->id }}">
+                                                Marcar Pagado
+                                            </button>
+                                        @elseif($p->qr_pago_estado === 'distribuidor')
+                                            <span class="estado-pago distribuidor">
+                                                Pagado al Distribuidor
+                                            </span>
+                                        @elseif($p->qr_pago_estado === 'central')
+                                            <span class="estado-pago central">
+                                                Pagado a la Central
+                                            </span>
+                                        @endif
+                                    @endif
+                                </div>
                             </div>
-
-                            <div class="lista-entregado" data-motoquero="{{ $motoquero->id }}" data-ruta="{{ $ruta }}">
-                                @if($entregadosRuta->isEmpty())
-                                    <div class="pedido-item text-muted">No hay pedidos entregados en Ruta {{ $ruta }}.</div>
-                                @else
-                                    @foreach($entregadosRuta as $p)
-                                        <div class="pedido-item">
-                                            <div class="d-flex justify-content-between align-items-center">
-                                                <b>#{{ $p->orden && $p->orden > 0 ? $p->orden : '' }} {{ $p->cliente->nombre }}</b>
-                                                <button 
-                                                    class="btn btn-sm btn-success px-2 py-0 btnEditarEntrega"
-                                                    style="font-size:12px;"
-                                                    data-id="{{ $p->id }}"
-                                                >
-                                                    Editar
-                                                </button>
-                                            </div>
-
-                                            <small><b>Total:</b> Bs {{ number_format($p->total_precio ?? 0,2) }}</small><br>
-                                            <small><b>Pago:</b> {{ $p->metodo_pago ?? 'No definido' }}</small>
-                                        
-                                            {{-- BOTON - RECIBO --}}
-                                            @php
-                                                $lineasProductos = "";
-                                                foreach ($p->detalles as $detalle) {
-                                                    $nombre = $detalle->producto;
-                                                    $cantidad = $detalle->cantidad;
-                                                    $precio = $detalle->precio_total;
-                                                    $lineasProductos .= "• $nombre — Cant: $cantidad — Bs $precio\n";
-                                                }
-
-                                                $total = $p->total_precio;
-                                                $metodo = ucfirst($p->metodo_pago);
-
-                                                $mensajeBase =
-                                                    "Hola, gracias por su compra 🙌\n\n".
-                                                    "🧾 *RECIBO DE COMPRA*\n\n".
-                                                    $lineasProductos . "\n".
-                                                    "💰 *TOTAL*: Bs $total\n".
-                                                    "💳 *Método de pago*: $metodo\n\n".
-                                                    "¡Gracias por confiar en nosotros!";
-
-                                                if (strtolower($metodo) === 'efectivo') {
-                                                    $msgEntrega = urlencode($mensajeBase);
-                                                } else if (strtolower($metodo) === 'qr') {
-                                                    $mensajeQR = $mensajeBase . "\n\n/";
-                                                    $msgEntrega = urlencode($mensajeQR);
-                                                } else {
-                                                    $msgEntrega = urlencode($mensajeBase);
-                                                }
-
-                                                $totalQR = number_format($p->total_precio ?? 0, 2);
-                                                $mensajeQRDirecto = "/QR $totalQR Bs.";
-                                                $msgQR = urlencode($mensajeQRDirecto);
-                                            @endphp
-
-                                            <div class="d-flex flex-wrap mt-1" style="gap:5px;">
-                                                <a href="https://wa.me/{{ $p->cliente->celular_real }}?text={{ $msgEntrega }}"
-                                                    target="_blank"
-                                                    class="btn btn-primary py-0 px-2"
-                                                    style="font-size:11px;">
-                                                    <i class="fab fa-whatsapp"></i> Recibo
-                                                </a>
-
-                                                @if(strtolower($p->metodo_pago) === 'qr')
-                                                    @if(!$p->qr_pago_estado)
-                                                        <a href="https://wa.me/{{ $p->cliente->celular_real }}?text={{ $msgQR }}"
-                                                            target="_blank"
-                                                            class="btn btn-warning py-0 px-2"
-                                                            style="font-size:11px;">
-                                                            QR
-                                                        </a>
-
-                                                        <button 
-                                                            class="btn btn-success py-0 px-2 btnPagadoCentral"
-                                                            style="font-size:11px;"
-                                                            data-id="{{ $p->id }}">
-                                                            Marcar Pagado
-                                                        </button>
-                                                    @elseif($p->qr_pago_estado === 'distribuidor')
-                                                        <span class="estado-pago distribuidor">
-                                                            Pagado al Distribuidor
-                                                        </span>
-                                                    @elseif($p->qr_pago_estado === 'central')
-                                                        <span class="estado-pago central">
-                                                            Pagado a la Central
-                                                        </span>
-                                                    @endif
-                                                @endif
-                                            </div>
-                                        </div>
-                                    @endforeach
-                                @endif
-                            </div>
-                        </div>
-                    @endforeach
+                        @endforeach
+                    @endif
                 </div>
             </div>
 
