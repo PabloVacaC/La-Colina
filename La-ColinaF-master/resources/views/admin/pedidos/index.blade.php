@@ -699,89 +699,81 @@
             </div>
 
             {{-- ===================================== --}}
-            {{-- ASIGNADO (SEGREGADO POR RUTA A, B, C, D) --}}
+            {{-- ASIGNADO (TODOS LOS PEDIDOS ASIGNADOS DEL DISTRIBUIDOR) --}}
             {{-- ===================================== --}}
             <div class="estado-section">
                 <div class="estado-title asignado">🟦 Asignado</div>
 
-                <div class="rutas-container mt-2">
-                    @foreach(['A','B','C','D'] as $ruta)
-                        @php
-                            $asignadosRuta = $pedidos
-                                ->where('estado','Asignado')
-                                ->where('motoquero_id',$motoquero->id)
-                                ->where('ruta', $ruta)
-                                ->sortBy(function($it) { return $it->orden === null ? PHP_INT_MAX : $it->orden; })
-                                ->values();
-                        @endphp
+                @php
+                    $asignadosMotoquero = $pedidos
+                        ->where('estado','Asignado')
+                        ->where('motoquero_id',$motoquero->id)
+                        ->sortBy(function($it) { return $it->orden === null ? PHP_INT_MAX : $it->orden; })
+                        ->values();
+                @endphp
 
-                        <div class="ruta ruta-{{ $ruta }} {{ $ruta === $rutaInicial ? 'active' : '' }}" data-ruta="{{ $ruta }}">
+                <div class="d-flex justify-content-between align-items-center mt-2 mb-2">
+                    <span class="badge bg-primary" style="font-size: 11px;">
+                        Total asignados: {{ $asignadosMotoquero->count() }} pedidos
+                    </span>
+                    @if($asignadosMotoquero->count() > 0)
+                        <button 
+                            class="btn btn-xs btn-dark btn-ver-mapa-asignados"
+                            data-motoquero="{{ $motoquero->id }}"
+                            data-ruta="">
+                            🗺 Ver mapa asignados
+                        </button>
+                    @endif
+                </div>
 
-                            <div class="d-flex justify-content-between align-items-center mb-2">
-                                <span class="badge bg-primary" style="font-size: 11px;">
-                                    Ruta {{ $ruta }} ({{ $asignadosRuta->count() }} pedidos)
-                                </span>
-                                @if($asignadosRuta->count() > 0)
-                                    <button 
-                                        class="btn btn-xs btn-dark btn-ver-mapa-asignados"
-                                        data-motoquero="{{ $motoquero->id }}"
-                                        data-ruta="{{ $ruta }}">
-                                        🗺 Ver mapa Ruta {{ $ruta }}
-                                    </button>
-                                @endif
+                <div class="lista-asignado lista-ruta" data-motoquero="{{ $motoquero->id }}">
+                    @if($asignadosMotoquero->isEmpty())
+                        <div class="pedido-item text-muted">No hay pedidos asignados para este distribuidor.</div>
+                    @else
+                        @foreach($asignadosMotoquero as $index => $p)
+                            @php
+                                $ultimaCompra = \App\Models\Pedido::with('detalles')
+                                    ->where('cliente_id', $p->cliente_id)
+                                    ->where('estado', 'Entregado')
+                                    ->where('id', '!=', $p->id)
+                                    ->orderBy('updated_at', 'desc')
+                                    ->first();
+                            @endphp
+
+                            <div class="pedido-item pedido-card" data-id="{{ $p->id }}">
+
+                                <b>#{{ $p->orden && $p->orden > 0 ? $p->orden : ($index + 1) }}</b> - {{ $p->cliente ? $p->cliente->nombre : 'Cliente' }}
+                                <small class="badge bg-secondary ms-1" style="font-size: 10px;">Ruta {{ $p->ruta ?? '-' }}</small>
+
+                                {{-- GPS --}}
+                                <div>
+                                    <small>
+                                        @if($p->cliente && $p->cliente->ubicacion_gps)
+                                            <a href="{{ $p->cliente->ubicacion_gps }}" target="_blank">Ver enlace</a>
+                                        @else
+                                            <span class="text-muted">No registrado</span>
+                                        @endif
+                                    </small>
+                                </div>
+
+                                {{-- ÚLTIMA COMPRA --}}
+                                <div class="mt-1">
+                                    <small><b>Última compra:</b></small>
+                                    @if($ultimaCompra && $ultimaCompra->detalles->count() > 0)
+                                        <ul class="mb-0 ps-3">
+                                            @foreach($ultimaCompra->detalles as $d)
+                                                <li>
+                                                    <small>{{ $d->producto }} × {{ $d->cantidad }}</small>
+                                                </li>
+                                            @endforeach
+                                        </ul>
+                                    @else
+                                        <small class="text-muted">Sin compras anteriores</small>
+                                    @endif
+                                </div>
                             </div>
-
-                            <div class="lista-asignado lista-ruta" data-motoquero="{{ $motoquero->id }}" data-ruta="{{ $ruta }}">
-                                @if($asignadosRuta->isEmpty())
-                                    <div class="pedido-item text-muted">No hay pedidos asignados en Ruta {{ $ruta }}.</div>
-                                @else
-                                    @foreach($asignadosRuta as $index => $p)
-                                        @php
-                                            $ultimaCompra = \App\Models\Pedido::with('detalles')
-                                                ->where('cliente_id', $p->cliente_id)
-                                                ->where('estado', 'Entregado')
-                                                ->where('id', '!=', $p->id)
-                                                ->orderBy('updated_at', 'desc')
-                                                ->first();
-                                        @endphp
-
-                                        <div class="pedido-item pedido-card" data-id="{{ $p->id }}">
-
-                                            <b>#{{ $p->orden && $p->orden > 0 ? $p->orden : ($index + 1) }}</b> - {{ $p->cliente->nombre }}
-
-                                            {{-- GPS --}}
-                                            <div>
-                                                <small>
-                                                    @if($p->cliente->ubicacion_gps)
-                                                        <a href="{{ $p->cliente->ubicacion_gps }}" target="_blank">Ver enlace</a>
-                                                    @else
-                                                        <span class="text-muted">No registrado</span>
-                                                    @endif
-                                                </small>
-                                            </div>
-
-                                            {{-- ÚLTIMA COMPRA --}}
-                                            <div class="mt-1">
-                                                <small><b>Última compra:</b></small>
-                                                @if($ultimaCompra && $ultimaCompra->detalles->count() > 0)
-                                                    <ul class="mb-0 ps-3">
-                                                        @foreach($ultimaCompra->detalles as $d)
-                                                            <li>
-                                                                <small>{{ $d->producto }} × {{ $d->cantidad }}</small>
-                                                            </li>
-                                                        @endforeach
-                                                    </ul>
-                                                @else
-                                                    <small class="text-muted">Sin compras anteriores</small>
-                                                @endif
-                                            </div>
-                                        </div>
-                                    @endforeach
-                                @endif
-                            </div>
-
-                        </div>
-                    @endforeach
+                        @endforeach
+                    @endif
                 </div>
             </div>
 
@@ -2408,8 +2400,8 @@ function actualizarBotonEmergencia() {
     // Quitar todos los botones existentes
     document.querySelectorAll('.btn-emergencia-bar').forEach(b => b.remove());
 
-    // Recorremos cada lista de ASIGNADOS dentro de una ruta activa
-    document.querySelectorAll('.ruta.active .lista-asignado').forEach(lista => {
+    // Recorremos cada lista de ASIGNADOS
+    document.querySelectorAll('.lista-asignado').forEach(lista => {
 
         const primerPedido = lista.querySelector('.pedido-item');
 
